@@ -145,7 +145,7 @@ describe('Branching BTree', () => {
 			for (let j = 0; j < C; j++) {
 				entries.push(i * C + j);
 			}
-			leaves.push(new LeafNode(entries));
+			leaves.push(new LeafNode(entries, tree));
 		}
 
 		const partitions: number[] = [];
@@ -153,7 +153,7 @@ describe('Branching BTree', () => {
 			partitions.push(i * C);
 		}
 
-		const rootBranchNode = new BranchNode(partitions, leaves); // Access BranchNode constructor
+		const rootBranchNode = new BranchNode(partitions, leaves, tree); // Access BranchNode constructor
 		(tree as any)['_root'] = rootBranchNode;
 
 		// Critical Insertion:

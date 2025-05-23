@@ -1,18 +1,18 @@
 import { KeyRange } from "./key-range.js";
-import { BranchNode, ITreeNode, LeafNode } from "./nodes.js";
 import { Path, PathBranch } from "./path.js";
+import { BranchNode, type ITreeNode, LeafNode } from "./nodes.js";
 
 /** Node capacity.  Not configurable - not worth the runtime memory, when almost nobody will touch this */
 export const NodeCapacity = 64;
 
 /**
  * Represents a lightweight B+(ish)Tree (data at leaves, but no linked list of leaves).
- * Allows for efficient storage and retrieval of data in a sorted manner.
+ * Provides copy-on-write capabilities
  * @template TEntry The type of entries stored in the B-tree.
  * @template TKey The type of keys used for indexing the entries.  This might be an element of TEntry, or TEntry itself.
  */
 export class BTree<TKey, TEntry> {
-	private _root: ITreeNode;
+	private _root?: ITreeNode;
 	private _version = 0;
 
 	/**
@@ -22,25 +22,41 @@ export class BTree<TKey, TEntry> {
 	constructor(
 		private readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
 		private readonly compare = (a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0 as number,
+		private base?: BTree<TKey, TEntry>
 	) {
-		this._root = new LeafNode([]);
+	}
+
+	get root(): ITreeNode {
+		if (this._root) {
+			return this._root;
+		} else if (this.base) {
+			return this.base.root;
+		}
+
+		this._root = new LeafNode<TEntry>([], this);
+		return this._root;
+	}
+
+	clearBase() {
+		this._root = this._root ?? this.base?.root;
+		this.base = undefined;
 	}
 
 	/** @returns a path to the first entry (on = false if no entries) */
 	first(): Path<TKey, TEntry> {
-		return this.getFirst(this._root);
+		return this.getFirst(this.root);
 	}
 
 	/** @returns a path to the last entry (on = false if no entries) */
 	last(): Path<TKey, TEntry> {
-		return this.getLast(this._root);
+		return this.getLast(this.root);
 	}
 
 	/** Attempts to find the given key
 	 * @returns Path to the key or the "crack" before it.  If `on` is true on the resulting path, the key was found.
 	 * 	If `on` is false, next() and prior() can attempt to move to the nearest match. */
 	find(key: TKey): Path<TKey, TEntry> {
-		return this.getPath(this._root, key);
+		return this.getPath(this.root, key);
 	}
 
 	/** Retrieves the entry for the given key.
@@ -422,7 +438,8 @@ export class BTree<TKey, TEntry> {
 				}
 				return [newPath, false];
 			} else {
-				path.leafNode.entries[path.leafIndex] = newEntry;
+				const mutable = this.mutableLeaf(path);
+				mutable.entries[path.leafIndex] = newEntry;
 			}
 		}
 		return [path, true];
@@ -430,13 +447,14 @@ export class BTree<TKey, TEntry> {
 
 	private internalDelete(path: Path<TKey, TEntry>): boolean {
 		if (path.on) {
-			path.leafNode.entries.splice(path.leafIndex, 1);
+			const mutable = this.mutableLeaf(path);
+			mutable.entries.splice(path.leafIndex, 1);
 			if (path.branches.length > 0) {   // Only worry about underflows, balancing, etc. if not root
 				if (path.leafIndex === 0) { // If we deleted index 0, update branches with new key
 					const pathBranch = path.branches.at(-1)!;
 					this.updatePartition(pathBranch.index, path, path.branches.length - 1, this.keyFromEntry(path.leafNode.entries[path.leafIndex]));
 				}
-				const newRoot = this.rebalanceLeaf(path, path.branches.length);
+				const newRoot = this.rebalanceLeaf(path);
 				if (newRoot) {
 					this._root = newRoot;
 				}
@@ -467,7 +485,7 @@ export class BTree<TKey, TEntry> {
 			--branchIndex;
 		}
 		if (split) {
-			const newBranch = new BranchNode<TKey>([split.key], [this._root, split.right]);
+			const newBranch = new BranchNode<TKey>([split.key], [this.root, split.right], this);
 			this._root = newBranch;
 			path.branches.unshift(new PathBranch(newBranch, split.indexDelta));
 		}
@@ -531,7 +549,8 @@ export class BTree<TKey, TEntry> {
 	}
 
 	private leafInsert(path: Path<TKey, TEntry>, entry: TEntry): Split<TKey> | undefined {
-		const { leafNode: leaf, leafIndex: index } = path;
+		const { leafIndex: index } = path;
+		const leaf = this.mutableLeaf(path);
 		if (leaf.entries.length < NodeCapacity) {  // No split needed
 			leaf.entries.splice(index, 0, entry);
 			return undefined;
@@ -542,7 +561,7 @@ export class BTree<TKey, TEntry> {
 		const moveEntries = leaf.entries.splice(midIndex);
 
 		// New node
-		const newLeaf = new LeafNode(moveEntries);
+		const newLeaf = new LeafNode(moveEntries, this);
 
 		const delta = index < midIndex ? 0 : 1;
 		if (delta) {	// new node goes into the new leaf
@@ -558,22 +577,23 @@ export class BTree<TKey, TEntry> {
 
 	private branchInsert(path: Path<TKey, TEntry>, branchIndex: number, split: Split<TKey>): Split<TKey> | undefined {
 		const pathBranch = path.branches[branchIndex];
-		const { index, node } = pathBranch;
+		const { index } = pathBranch;
 		pathBranch.index += split.indexDelta;
-		node.partitions.splice(index, 0, split.key);
-		node.nodes.splice(index + 1, 0, split.right);
-		if (node.nodes.length <= NodeCapacity) {  // no split needed
+		const mutable = this.mutableBranch(path.branches.slice(0, branchIndex + 1), path);
+		mutable.partitions.splice(index, 0, split.key);
+		mutable.nodes.splice(index + 1, 0, split.right);
+		if (mutable.nodes.length <= NodeCapacity) {  // no split needed
 			return undefined;
 		}
 		// Full. Split needed
 
-		const midIndex = node.nodes.length >>> 1;
-		const movePartitions = node.partitions.splice(midIndex);
-		const newPartition = node.partitions.pop()!;	// Extra partition promoted to parent
-		const moveNodes = node.nodes.splice(midIndex);
+		const midIndex = mutable.nodes.length >>> 1;
+		const movePartitions = mutable.partitions.splice(midIndex);
+		const newPartition = mutable.partitions.pop()!;	// Extra partition promoted to parent
+		const moveNodes = mutable.nodes.splice(midIndex);
 
 		// New node
-		const newBranch = new BranchNode(movePartitions, moveNodes);
+		const newBranch = new BranchNode(movePartitions, moveNodes, this);
 
 		const delta = pathBranch.index < midIndex ? 0 : 1;
 		if (delta) { // If new entry in new node, repoint and slide the index
@@ -584,50 +604,59 @@ export class BTree<TKey, TEntry> {
 		return new Split<TKey>(newPartition, newBranch, delta);
 	}
 
-	private rebalanceLeaf(path: Path<TKey, TEntry>, depth: number): ITreeNode | undefined {
-		if (depth === 0 || path.leafNode.entries.length >= (NodeCapacity >>> 1)) {
+	private rebalanceLeaf(path: Path<TKey, TEntry>): ITreeNode | undefined {
+		if (path.leafNode.entries.length >= (NodeCapacity >>> 1)) {
 			return undefined;
 		}
 
 		const leaf = path.leafNode;
-		const parent = path.branches.at(depth - 1)!;
+		const parent = path.branches.at(-1)!;
+		const depth = path.branches.length - 1;
 		const pIndex = parent.index;
 		const pNode = parent.node;
 
-		const rightSib = pIndex < pNode.nodes.length ? pNode.nodes[pIndex + 1] as LeafNode<TEntry> : undefined;
+		const rightSib = pNode.nodes[pIndex + 1] as LeafNode<TEntry> | undefined;
 		if (rightSib && rightSib.entries.length > (NodeCapacity >>> 1)) {   // Attempt to borrow from right sibling
-			const entry = rightSib.entries.shift()!;
-			leaf.entries.push(entry);
-			this.updatePartition(pIndex + 1, path, depth - 1, this.keyFromEntry(rightSib.entries[0]!));
+			const rightMutable = this.mutableLeaf(leafSibPath(path, rightSib, 1), path);
+			const leafMutable = this.mutableLeaf(path);
+			const entry = rightMutable.entries.shift()!;
+			leafMutable.entries.push(entry);
+			this.updatePartition(pIndex + 1, path, depth, this.keyFromEntry(rightMutable.entries[0]!));
 			return undefined;
 		}
 
-		const leftSib = pIndex > 0 ? pNode.nodes[pIndex - 1] as LeafNode<TEntry> : undefined;
+		const leftSib = pNode.nodes[pIndex - 1] as LeafNode<TEntry> | undefined;
 		if (leftSib && leftSib.entries.length > (NodeCapacity >>> 1)) {   // Attempt to borrow from left sibling
-			const entry = leftSib.entries.pop()!;
-			leaf.entries.unshift(entry);
-			this.updatePartition(pIndex, path, depth - 1, this.keyFromEntry(entry));
+			const leftMutable = this.mutableLeaf(leafSibPath(path, leftSib, -1), path);
+			const leafMutable = this.mutableLeaf(path);
+			const entry = leftMutable.entries.pop()!;
+			leafMutable.entries.unshift(entry);
+			this.updatePartition(pIndex, path, depth, this.keyFromEntry(entry));
 			path.leafIndex += 1;
 			return undefined;
 		}
 
 		if (rightSib && rightSib.entries.length + leaf.entries.length <= NodeCapacity) {  // Attempt to merge right sibling into leaf (right sib deleted)
-			leaf.entries.push(...rightSib.entries);
-			pNode.partitions.splice(pIndex, 1);
-			pNode.nodes.splice(pIndex + 1, 1);
+			const leafMutable = this.mutableLeaf(path);
+			const pNodeMutable = this.mutableBranch(path.branches);
+			leafMutable.entries.push(...rightSib.entries);
+			pNodeMutable.partitions.splice(pIndex, 1);
+			pNodeMutable.nodes.splice(pIndex + 1, 1);
 			if (pIndex === 0) { // 0th node of parent, update parent key
-				this.updatePartition(pIndex, path, depth - 1, this.keyFromEntry(leaf.entries[0]!));
+				this.updatePartition(pIndex, path, depth, this.keyFromEntry(leafMutable.entries[0]!));
 			}
-			return this.rebalanceBranch(path, depth - 1);
+			return this.rebalanceBranch(path, depth);
 		}
 
 		if (leftSib && leftSib.entries.length + leaf.entries.length <= NodeCapacity) {  // Attempt to merge into left sibling (leaf deleted)
-			leftSib.entries.push(...leaf.entries);
-			pNode.partitions.splice(pIndex - 1, 1);
-			pNode.nodes.splice(pIndex, 1);
+			const leftMutable = this.mutableLeaf(leafSibPath(path, leftSib, -1), path);
+			const pNodeMutable = this.mutableBranch(path.branches);
 			path.leafNode = leftSib;
 			path.leafIndex += leftSib.entries.length;
-			return this.rebalanceBranch(path, depth - 1);
+			leftMutable.entries.push(...leaf.entries);
+			pNodeMutable.partitions.splice(pIndex - 1, 1);
+			pNodeMutable.nodes.splice(pIndex, 1);
+			return this.rebalanceBranch(path, depth);
 		}
 	}
 
@@ -646,58 +675,106 @@ export class BTree<TKey, TEntry> {
 		const pIndex = parent.index;
 		const pNode = parent.node;
 
-		const rightSib = pIndex < pNode.nodes.length ? (pNode.nodes[pIndex + 1]) as BranchNode<TKey> : undefined;
+		const rightSib = pNode.nodes[pIndex + 1] as BranchNode<TKey> | undefined;
 		if (rightSib && rightSib.nodes.length > (NodeCapacity >>> 1)) {   // Attempt to borrow from right sibling
-			branch.partitions.push(pNode.partitions[pIndex]);
-			const node = rightSib.nodes.shift()!;
-			branch.nodes.push(node);
-			const rightKey = rightSib.partitions.shift()!;	// Replace parent partition with old key from right sibling
+			const rightMutable = this.mutableBranch([...path.branches.slice(0, depth), new PathBranch(rightSib, pIndex + 1)], path);
+			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			branchMutable.partitions.push(pNode.partitions[pIndex]);
+			const node = rightMutable.nodes.shift()!;
+			branchMutable.nodes.push(node);
+			const rightKey = rightMutable.partitions.shift()!;	// Replace parent partition with old key from right sibling
 			this.updatePartition(pIndex + 1, path, depth - 1, rightKey);
 			return undefined;
 		}
 
-		const leftSib = pIndex > 0 ? (pNode.nodes[pIndex - 1] as BranchNode<TKey>) : undefined;
+		const leftSib = pNode.nodes[pIndex - 1] as BranchNode<TKey> | undefined;
 		if (leftSib && leftSib.nodes.length > (NodeCapacity >>> 1)) {   // Attempt to borrow from left sibling
-			branch.partitions.unshift(pNode.partitions[pIndex - 1]);
-			const node = leftSib.nodes.pop()!;
-			branch.nodes.unshift(node);
-			const pKey = leftSib.partitions.pop()!;
+			const leftMutable = this.mutableBranch([...path.branches.slice(0, depth), new PathBranch(leftSib, pIndex - 1)], path);
+			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			branchMutable.partitions.unshift(pNode.partitions[pIndex - 1]);
+			const node = leftMutable.nodes.pop()!;
+			branchMutable.nodes.unshift(node);
+			const pKey = leftMutable.partitions.pop()!;
 			pathBranch.index += 1;
 			this.updatePartition(pIndex, path, depth - 1, pKey);
 			return undefined;
 		}
 
 		if (rightSib && rightSib.nodes.length + branch.nodes.length <= NodeCapacity) {   // Attempt to merge right sibling into self
-			const pKey = pNode.partitions.splice(pIndex, 1)[0]
-			branch.partitions.push(pKey);
-			branch.partitions.push(...rightSib.partitions);
-			branch.nodes.push(...rightSib.nodes);
-			pNode.nodes.splice(pIndex + 1, 1);
-			if (pIndex === 0 && pNode.partitions.length > 0) {	// if parent is left edge, new right sibling is now the first partition
-				this.updatePartition(pIndex, path, depth - 1, pNode.partitions[0]);
+			const pMutable = this.mutableBranch(path.branches.slice(0, depth), path);
+			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			const pKey = pMutable.partitions.splice(pIndex, 1)[0]
+			branchMutable.partitions.push(pKey);
+			branchMutable.partitions.push(...rightSib.partitions);
+			branchMutable.nodes.push(...rightSib.nodes);
+			pMutable.nodes.splice(pIndex + 1, 1);
+			if (pIndex === 0 && pMutable.partitions.length > 0) {	// if parent is left edge, new right sibling is now the first partition
+				this.updatePartition(pIndex, path, depth - 1, pMutable.partitions[0]);
 			}
 			return this.rebalanceBranch(path, depth - 1);
 		}
 
 		if (leftSib && leftSib.nodes.length + branch.nodes.length <= NodeCapacity) {   // Attempt to merge self into left sibling
-			const pKey = pNode.partitions.splice(pIndex - 1, 1)[0];
-			leftSib.partitions.push(pKey);
-			leftSib.partitions.push(...branch.partitions);
-			leftSib.nodes.push(...branch.nodes);
-			pNode.nodes.splice(pIndex, 1);
-			pathBranch.node = leftSib;
-			pathBranch.index += leftSib.nodes.length;
+			const pMutable = this.mutableBranch(path.branches.slice(0, depth), path);
+			const leftMutable = this.mutableBranch([...path.branches.slice(0, depth), new PathBranch(leftSib, pIndex - 1)], path);
+			pathBranch.node = leftMutable;
+			pathBranch.index += leftMutable.nodes.length;
+			const pKey = pMutable.partitions.splice(pIndex - 1, 1)[0];
+			leftMutable.partitions.push(pKey);
+			leftMutable.partitions.push(...branch.partitions);
+			leftMutable.nodes.push(...branch.nodes);
+			pMutable.nodes.splice(pIndex, 1);
 			return this.rebalanceBranch(path, depth - 1);
 		}
 	}
 
 	private updatePartition(nodeIndex: number, path: Path<TKey, TEntry>, depth: number, newKey: TKey) {
-		const pathBranch = path.branches[depth];
 		if (nodeIndex > 0) {  // Only affects this branch; just update the partition key
-			pathBranch.node.partitions[nodeIndex - 1] = newKey;
+			const mutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			mutable.partitions[nodeIndex - 1] = newKey;
 		} else if (depth !== 0) {
 			this.updatePartition(path.branches[depth - 1].index, path, depth - 1, newKey);
 		}
+	}
+
+	/** Returns a mutable copy of the given leaf node, replacing parent references through the root as needed. */
+	private mutableLeaf(path: Path<TKey, TEntry>, mainPath?: Path<TKey, TEntry>): LeafNode<TEntry> {
+		if (this.base && path.leafNode.tree !== this) {
+			const map = new Map<ITreeNode, ITreeNode>();
+			const newNode = path.leafNode.clone(this);
+			map.set(path.leafNode, newNode);
+			this.replaceRootward(newNode, path.branches, map);
+			(mainPath ?? path).remap(map);
+			return newNode;
+		}
+		return path.leafNode;
+	}
+
+	/** Returns a mutable copy of the given branch node, replacing rootward references in segments through the root as needed.
+	 * If a main path is provided, any rootward changes made in this traversal that overlap that path will also be reflected in the main path.
+	 */
+	private mutableBranch(segments: PathBranch<TKey>[], mainPath?: Path<TKey, TEntry>) {
+		const map = new Map<ITreeNode, ITreeNode>();
+		this.replaceRootward(undefined, segments, map);
+		mainPath?.remap(map);
+		const branch = segments.at(-1)!.node;
+		return map.get(branch) as BranchNode<TKey> ?? branch;
+	}
+
+	private replaceRootward(prior: ITreeNode | undefined, segments: PathBranch<TKey>[], map: Map<ITreeNode, ITreeNode>) {
+		for (let i = segments.length - 1; i >= 0; --i) {
+			const seg = segments[i];
+			if (seg.node.tree === this) {
+				return;
+			}
+			const newBranch = seg.node.clone(this);
+			if (prior) {
+				newBranch.nodes[seg.index] = prior;
+			}
+			map.set(seg.node, newBranch);
+			prior = newBranch;
+		}
+		this._root = prior;
 	}
 
 	private validatePath(path: Path<TKey, TEntry>) {
@@ -705,6 +782,10 @@ export class BTree<TKey, TEntry> {
 			throw new Error("Path is invalid due to mutation of the tree");
 		}
 	}
+}
+
+function leafSibPath<TKey, TEntry>(path: Path<TKey, TEntry>, sib: LeafNode<TEntry>, delta: number): Path<TKey, TEntry> {
+	return new Path<TKey, TEntry>(path.branches.map(b => b.clone()), sib, path.leafIndex + delta, path.on, path.version);
 }
 
 class Split<TKey> {

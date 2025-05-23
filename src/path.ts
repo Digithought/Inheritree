@@ -1,4 +1,4 @@
-import { BranchNode, LeafNode } from "./nodes.js";
+import { BranchNode, LeafNode, type ITreeNode } from "./nodes.js";
 
 export class PathBranch<TKey> {
 	constructor (
@@ -33,5 +33,13 @@ export class Path<TKey, TEntry> {
 
 	clone() {
 			return new Path(this.branches.map(b => b.clone()), this.leafNode, this.leafIndex, this.on, this.version);
+	}
+
+	/* Update any of the nodes in this path based on the given mapping. */
+	remap(map: Map<ITreeNode, ITreeNode>) {
+		this.branches.forEach(b => {
+			b.node = map.get(b.node) as BranchNode<TKey> ?? b.node;
+		});
+		this.leafNode = map.get(this.leafNode) as LeafNode<TEntry> ?? this.leafNode;
 	}
 }

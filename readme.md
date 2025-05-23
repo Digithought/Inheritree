@@ -1,10 +1,12 @@
-# Digitree
+# Inheritree
 
-Lightweight and performant B+Tree.  [On GitHub](https://github.com/Digithought/Digitree)
+Lightweight and performant B+Tree with copy-on-write (COW) inheritance. [On GitHub](https://github.com/Digithought/Inheritree)  This is a fork of [Digitree](https://github.com/Digithought/Digitree); if you do not need inheritance, use that library instead.
 
 ### Overview
 
-Welcome to Digitree, a fast in-memory B+Tree[^1], written in Typescript using generics.  A B+Tree is an efficient balanced tree structure, which provides the basis for most database engines, but also happens to be one of the efficient structures for storing sorted information in-memory.  Worst case space efficiency is N*2, which matches that of "size doubling" list building methods.  Unlike the latter, however, random insertion and deletion are far more efficient, which is important when maintaining total ordering.
+Welcome to Inheritree, a fast in-memory B+Tree[^1], written in Typescript using generics. Inheritree extends the capabilities of a traditional B+Tree by incorporating a copy-on-write inheritance mechanism. This allows new tree instances to be created as derivatives of a base tree. Modifications to the derived tree only affect its own structure, copying relevant nodes from the base as needed, leaving the base tree untouched. This is particularly useful for scenarios requiring versioning, snapshots, or isolated transactional workspaces.
+
+A B+Tree is an efficient balanced tree structure, which provides the basis for most database engines, but also happens to be one of the efficient structures for storing sorted information in-memory. Worst case space efficiency is N*2, which matches that of "size doubling" list building methods. Unlike the latter, however, random insertion and deletion are far more efficient, which is important when maintaining total ordering.
 
 This implementation takes two type arguments: `TKey` and `TEntry`.  The key must be obtainable from the entry, and a constructor callback extracts the key from an entry.  If TEntry and TKey are the same, the tree essentially acts like an ordered set.  To use the tree like a sorted dictionary, simply use an entry type like this: `{ key: 5, value: "five" }` with a callback like this: `e => e.key`.  Inserted entries are frozen to ensure that they don't mutate, and corrupt the tree.
 
@@ -22,6 +24,7 @@ Features:
 * **Path** navigation through `next` and `prior` or `moveNext` and `movePrior`
 * **Find nearest**, using `next` on an unsuccessful path
 * **Count** using `getCount`, computed by summing leaf entries
+* **Copy-on-Write Inheritance**: Create new tree versions from a base tree efficiently. Changes in the derived tree do not affect the base.
 
 WARNING: this library freezes added entries to reduce the chance that keys are externally mutated, but this is not done transitively, so it is possible that an object's key can be mutated after adding, resulting in tree corruption.  Don't attempt to change a key value after it has been inserted.  Use updateAt, upsert, insdate, or deleteAt/insert to change the key value.
 
@@ -33,19 +36,19 @@ WARNING: this library freezes added entries to reduce the chance that keys are e
 
 Via npm:
 ```
-  npm install digitree
+  npm install inheritree
 ```
 
 Via pnpm/yarn:
 ```
-  pnpm add digitree
-  yarn add digitree
+  pnpm add inheritree
+  yarn add inheritree
 ```
 
 #### As an ordered set
 
 ```ts
-  import { BTree } from 'digitree';
+  import { BTree } from 'inheritree';
   ...
   const tree = new BTree<number, number>();
   tree.insert(3); tree.insert(1); tree.insert(2);
@@ -60,7 +63,7 @@ Via pnpm/yarn:
 #### As an ordered dictionary
 
 ```ts
-  import { BTree } from 'digitree';
+  import { BTree } from 'inheritree';
   ...
   interface Widget { id: number, shape: "square" | "circle" };
   const tree = new BTree<number, Widget>(e => e.id);
@@ -73,7 +76,35 @@ Via pnpm/yarn:
   console.log(tree.get(2));  // Equivalent to find then at
 ```
 
-#### See [Reference Documentation](https://digithought.github.io/Digitree/)
+#### Using Copy-on-Write Inheritance
+
+```ts
+  import { BTree } from 'inheritree';
+  ...
+  const baseTree = new BTree<number, number>();
+  baseTree.insert(10); baseTree.insert(20);
+
+  // Create a derived tree. It initially shares all data with baseTree.
+  const derivedTree = new BTree<number, number>((e) => e, undefined, baseTree);
+  derivedTree.insert(15); // Modifies derivedTree, baseTree is unaffected
+  derivedTree.deleteAt(derivedTree.find(10)); // Entry 10 deleted from derivedTree only
+
+  console.log("Base tree items:");
+  for (let path of baseTree.ascending(baseTree.first())) {
+    console.log(baseTree.at(path)); // Will show 10, 20
+  }
+
+  console.log("Derived tree items:");
+  for (let path of derivedTree.ascending(derivedTree.first())) {
+    console.log(derivedTree.at(path)); // Will show 15, 20
+  }
+
+  // To make the derived tree independent (flattening its state):
+  derivedTree.clearBase();
+```
+
+
+#### See [Reference Documentation](https://digithought.github.io/Inheritree/)
 
 #### Paths
 
@@ -109,6 +140,8 @@ The best-case and worst-case time complexities for search, insertion, and deleti
 Bug fixes, architectural enhancements, and speed improvement suggestions are welcome.  Added "helper" features might be better as an add-on library since the goal of this is to remain minimalistic.
 
 #### Help wanted
+
+TODO: need version checking against base tree; right now, the base table is assumed to be immutable.
 
 * Benchmark suite
 * Better insulation of path's internals
