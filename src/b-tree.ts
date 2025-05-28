@@ -143,7 +143,8 @@ export class BTree<TKey, TEntry> {
 		const path = this.find(this.keyFromEntry(entry));
 		Object.freeze(entry);
 		if (path.on) {
-			path.leafNode.entries[path.leafIndex] = entry;
+			const mutable = this.mutableLeaf(path);
+			mutable.entries[path.leafIndex] = entry;
 		} else {
 			this.internalInsertAt(path, entry);
 		}
