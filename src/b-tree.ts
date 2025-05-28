@@ -20,8 +20,8 @@ export class BTree<TKey, TEntry> {
 	 * @param [keyFromEntry=(entry: TEntry) => entry as unknown as TKey] a function to extract the key from an entry.  The default assumes the key is the entry itself.
 	 */
 	constructor(
-		private readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
-		private readonly compare = (a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0 as number,
+		public readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
+		public readonly compare = (a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0 as number,
 		private base?: BTree<TKey, TEntry>
 	) {
 	}
