@@ -652,8 +652,8 @@ export class BTree<TKey, TEntry> {
 		if (leftSib && leftSib.entries.length + leaf.entries.length <= NodeCapacity) {  // Attempt to merge into left sibling (leaf deleted)
 			const leftMutable = this.mutableLeaf(leafSibPath(path, leftSib, -1), path);
 			const pNodeMutable = this.mutableBranch(path.branches);
-			path.leafNode = leftSib;
-			path.leafIndex += leftSib.entries.length;
+			path.leafNode = leftMutable;
+			path.leafIndex += leftMutable.entries.length;
 			leftMutable.entries.push(...leaf.entries);
 			pNodeMutable.partitions.splice(pIndex - 1, 1);
 			pNodeMutable.nodes.splice(pIndex, 1);
@@ -668,7 +668,7 @@ export class BTree<TKey, TEntry> {
 			return path.branches[depth + 1]?.node ?? path.leafNode;
 		}
 
-		if (depth === 0 || (branch.nodes.length >= NodeCapacity << 1)) {
+		if (depth === 0 || (branch.nodes.length >= NodeCapacity >>> 1)) {
 			return undefined;
 		}
 
@@ -709,7 +709,7 @@ export class BTree<TKey, TEntry> {
 			branchMutable.partitions.push(...rightSib.partitions);
 			branchMutable.nodes.push(...rightSib.nodes);
 			pMutable.nodes.splice(pIndex + 1, 1);
-			if (pIndex === 0 && pMutable.partitions.length > 0) {	// if parent is left edge, new right sibling is now the first partition
+			if (pIndex === 0 && pMutable.partitions.length > 0) {	// if branch is left edge of parent, new right sibling is now the first partition
 				this.updatePartition(pIndex, path, depth - 1, pMutable.partitions[0]);
 			}
 			return this.rebalanceBranch(path, depth - 1);
