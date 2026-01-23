@@ -109,10 +109,10 @@ describe('Branching BTree', () => {
 		
 		const halfCap = NodeCapacity / 2;	// 32
 		
-		const leftLeaf = new LeafNode([...Array(halfCap).keys()]);	// [0..31]
-		const middleLeaf = new LeafNode([50]);	// Single entry - will be deleted
-		const rightLeaf = new LeafNode([...Array(halfCap).keys()].map(i => i + 100));	// [100..131]
-		const rootBranch = new BranchNode<number>([50, 100], [leftLeaf, middleLeaf, rightLeaf]);
+		const leftLeaf = new LeafNode([...Array(halfCap).keys()], tree);	// [0..31]
+		const middleLeaf = new LeafNode([50], tree);	// Single entry - will be deleted
+		const rightLeaf = new LeafNode([...Array(halfCap).keys()].map(i => i + 100), tree);	// [100..131]
+		const rootBranch = new BranchNode<number>([50, 100], [leftLeaf, middleLeaf, rightLeaf], tree);
 		(tree as any)['_root'] = rootBranch;
 		
 		// Verify setup
