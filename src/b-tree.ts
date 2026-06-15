@@ -765,6 +765,13 @@ export class BTree<TKey, TEntry> {
 		for (let i = segments.length - 1; i >= 0; --i) {
 			const seg = segments[i];
 			if (seg.node.tree === this) {
+				// Ancestor is already owned by this tree: link the freshly-cloned child into it
+				// rather than returning unconditionally, or the clone is orphaned and the owned
+				// ancestor keeps pointing at the stale base node (dropped writes / phantom keys).
+				// The `prior` guard preserves the mutableBranch(undefined, ...) no-op entry path.
+				if (prior) {
+					seg.node.nodes[seg.index] = prior;
+				}
 				return;
 			}
 			const newBranch = seg.node.clone(this);
@@ -785,7 +792,14 @@ export class BTree<TKey, TEntry> {
 }
 
 function leafSibPath<TKey, TEntry>(path: Path<TKey, TEntry>, sib: LeafNode<TEntry>, delta: number): Path<TKey, TEntry> {
-	return new Path<TKey, TEntry>(path.branches.map(b => b.clone()), sib, path.leafIndex + delta, path.on, path.version);
+	const branches = path.branches.map(b => b.clone());
+	// Shift the deepest branch index by `delta` so the cloned path addresses the sibling's
+	// parent slot (pIndex + delta), not the deleted leaf's slot. Without this, the wrong slot
+	// is made mutable and the borrow/merge corrupts the COW node linkage.
+	if (branches.length > 0) {
+		branches[branches.length - 1].index += delta;
+	}
+	return new Path<TKey, TEntry>(branches, sib, path.leafIndex + delta, path.on, path.version);
 }
 
 class Split<TKey> {
