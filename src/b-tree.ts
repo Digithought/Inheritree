@@ -708,9 +708,9 @@ export class BTree<TKey, TEntry> {
 			branchMutable.partitions.push(...rightSib.partitions);
 			branchMutable.nodes.push(...rightSib.nodes);
 			pMutable.nodes.splice(pIndex + 1, 1);
-			if (pIndex === 0 && pMutable.partitions.length > 0) {	// if branch is left edge of parent, new right sibling is now the first partition
-				this.updatePartition(pIndex, path, depth - 1, pMutable.partitions[0]);
-			}
+			// No partition update needed: merging the right sibling in keeps branchMutable.nodes[0], so the
+			// branch's subtree minimum is unchanged. (The old code wrote pMutable.partitions[0] here, which is
+			// the parent's first separator - larger than the branch's true min - corrupting an ancestor partition.)
 			return this.rebalanceBranch(path, depth - 1);
 		}
 
@@ -754,6 +754,14 @@ export class BTree<TKey, TEntry> {
 	 * If a main path is provided, any rootward changes made in this traversal that overlap that path will also be reflected in the main path.
 	 */
 	private mutableBranch(segments: PathBranch<TKey>[], mainPath?: Path<TKey, TEntry>) {
+		// No base means nothing to copy-on-write against: the branch is already owned (or, for a
+		// hand-built tree, unowned but exclusively ours), so return it directly rather than running
+		// replaceRootward. Mirrors the `this.base` guard in mutableLeaf and avoids cloning nodes whose
+		// owner is unset (e.g. manually-constructed test trees), which would otherwise mutate a clone
+		// while the caller still holds the original.
+		if (!this.base) {
+			return segments.at(-1)!.node;
+		}
 		const map = new Map<ITreeNode, ITreeNode>();
 		this.replaceRootward(undefined, segments, map);
 		mainPath?.remap(map);
