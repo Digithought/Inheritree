@@ -1,6 +1,5 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/b-tree.js';
-import { LeafNode } from '../src/nodes.js'; // For type checking if needed, or tree.first().on check
 import { assertTreeInvariants, assertOwnershipInvariant, snapshotBase } from './helpers/invariants.js';
 import { lcg, lcgInt } from './helpers/rng.js';
 
@@ -25,26 +24,6 @@ function getAllEntries<TKey, TEntry>(
     // For primitive entries or entries where key order implies full order, this direct push is fine.
     return entries;
 }
-
-// Helper to get all entries as key-value pairs if TEntry is {key, value}
-interface KeyValue<K,V> { key: K; value: V; }
-function getAllKeyValues<TKey, TValue>(
-    tree: BTree<TKey, KeyValue<TKey, TValue>>
-): KeyValue<TKey, TValue>[] {
-    const entries: KeyValue<TKey, TValue>[] = [];
-    const firstPath = tree.first();
-    if (!firstPath.on) {
-        return entries;
-    }
-    for (const path of tree.ascending(firstPath)) {
-        const entry = tree.at(path);
-        if (entry !== undefined) {
-            entries.push(entry);
-        }
-    }
-    return entries;
-}
-
 
 describe('BTree Copy-on-Write (COW) Functionality', () => {
     const keyFromNumber = (n: number) => n;
