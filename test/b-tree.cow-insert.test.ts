@@ -46,6 +46,14 @@ describe('BTree COW insert splitting', () => {
 		return depth;
 	}
 
+	/** Number of children at the root branch (0 if the root is a leaf). A non-root branch split that does
+	 * not deepen the tree manifests as the root gaining a child (the promoted half), so comparing this
+	 * before/after — with depth held constant — proves an intermediate branch actually split. */
+	function rootChildCount(tree: BTree<number, number>): number {
+		const r = tree.root;
+		return r instanceof BranchNode ? (r as BranchNode<number>).nodes.length : 0;
+	}
+
 	/** assertTreeInvariants needs a local root to validate; a COW child with no writes legitimately has
 	 * none (it defers entirely to its base), so guard structural checks behind this. */
 	function hasLocalRoot(tree: BTree<number, number>): boolean {
@@ -149,12 +157,14 @@ describe('BTree COW insert splitting', () => {
 	 *   - the child is structurally well-formed and its mutable spine is connected & base-disjoint,
 	 *   - the base is byte-for-byte untouched.
 	 * When `expectChildDeeperThanBase`, also asserts the child root split deeper than the base (root split).
+	 * When `expectNonRootBranchSplit`, asserts an *intermediate* (non-root) branch split occurred: the tree
+	 * depth is unchanged but the root gained a child (the promoted half of the split branch).
 	 */
 	function checkInsertScenario(
 		count: number,
 		stride: number,
 		insertKeys: number[],
-		opts: { expectChildDeeperThanBase?: boolean } = {},
+		opts: { expectChildDeeperThanBase?: boolean; expectNonRootBranchSplit?: boolean } = {},
 	): { base: BTree<number, number>; cow: BTree<number, number> } {
 		const { base, keys } = makeBase(count, stride);
 		const baseSet = new Set(keys);
@@ -166,6 +176,7 @@ describe('BTree COW insert splitting', () => {
 		const cow = new BTree<number, number>(idFn, cmp, base);
 		const snap = snapshotBase(base);	// capture base before any COW write, for the ownership invariant
 		const baseDepth = depthOf(base.root);
+		const baseRootChildren = rootChildCount(base);
 
 		insertAll(cow, insertKeys);
 
@@ -197,6 +208,15 @@ describe('BTree COW insert splitting', () => {
 			expect(cow.root.tree, 'child owns its (split) root').to.equal(cow);
 		}
 
+		if (opts.expectNonRootBranchSplit) {
+			// A non-root branch split promotes one half up to the parent without deepening the tree, so the
+			// depth is unchanged while the root gains a child. If this assertion ever fails, the chosen sizes
+			// stopped exercising the `branchInsert` -> split -> propagate path on an intermediate branch.
+			expect(depthOf(cow.root), 'tree depth unchanged (split stayed below the root)').to.equal(baseDepth);
+			expect(rootChildCount(cow), 'an intermediate branch split pushed a new child up to the root')
+				.to.be.greaterThan(baseRootChildren);
+		}
+
 		return { base, cow };
 	}
 
@@ -226,8 +246,12 @@ describe('BTree COW insert splitting', () => {
 
 		// A 3-level base: a dense interior block cascades leaf splits up into an intermediate branch, forcing
 		// a non-root branch split (the `branchInsert` -> split -> propagate path) without disturbing the base.
+		// The 1500-key block concentrated in one intermediate branch's region pushes its child count past
+		// NodeCapacity, so it splits and promotes a child to the (still 2-child) root — depth stays 2.
+		// `expectNonRootBranchSplit` hard-asserts that split actually happened (root child count grew, depth
+		// unchanged), so the case cannot silently stop exercising the path it is named for.
 		it('branch split: inserts cascade up a 3-level base while it stays pristine', () => {
-			checkInsertScenario(2100, 100, freshBlock(105000, 600, 100));
+			checkInsertScenario(2100, 100, freshBlock(120000, 1500, 100), { expectNonRootBranchSplit: true });
 		});
 	});
 
