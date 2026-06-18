@@ -6,8 +6,8 @@
   "extension": [".ts", ".js"],
   "reporter": ["text", "lcov"],
   "check-coverage": true,
-  "lines": 98,
-  "statements": 98,
+  "lines": 100,
+  "statements": 100,
   "branches": 99,
-  "functions": 97
+  "functions": 100
 }
