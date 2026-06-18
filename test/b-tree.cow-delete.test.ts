@@ -1,5 +1,7 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/b-tree.js';
+import { assertTreeInvariants, assertOwnershipInvariant, snapshotBase } from './helpers/invariants.js';
+import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 
 /**
  * Regression + property suite for copy-on-write DELETE rebalancing.
@@ -31,6 +33,12 @@ describe('BTree COW delete rebalancing', () => {
 		const out: number[] = [];
 		for (let i = lo; i <= hi; i++) out.push(i);
 		return out;
+	}
+
+	/** assertTreeInvariants needs a local root to validate; a COW child with no writes legitimately
+	 * has none (it defers entirely to its base), so guard structural checks behind this. */
+	function hasLocalRoot(tree: BTree<number, number>): boolean {
+		return Boolean((tree as any)['_root']);
 	}
 
 	/** A base tree filled 1..n and a COW child inheriting it (the consumer's layering shape). */
@@ -100,6 +108,7 @@ describe('BTree COW delete rebalancing', () => {
 	/** Run one predicate against a fresh COW tree: matched == deleted, survivors == complement, base untouched. */
 	function checkPredicate(n: number, pred: (k: number) => boolean): void {
 		const { base, cow } = makeCow(n);
+		const snap = snapshotBase(base);	// capture base before any COW writes, for the ownership invariant
 		const expected = range(1, n).filter(k => !pred(k));
 		const matched = range(1, n).filter(pred).length;
 
@@ -115,17 +124,16 @@ describe('BTree COW delete rebalancing', () => {
 			expect(cow.get(i), `cow.get(${i})`).to.equal(pred(i) ? undefined : i);
 		}
 
+		// Additive structural/ownership cross-checks (never weaken the functional assertions above):
+		// the COW child is internally well-formed and its mutable spine is connected & base-disjoint,
+		// with the base proven pristine against the pre-delete snapshot.
+		if (deleted > 0) {	// a no-op predicate leaves the child deferring to base (no local root to validate)
+			assertTreeInvariants(cow);
+		}
+		assertOwnershipInvariant(cow, base, snap);
+
 		// The inherited base must be unmodified by the COW child's deletes.
 		expect(liveSet(base), 'base tree unaffected by COW deletes').to.deep.equal(range(1, n));
-	}
-
-	/** Deterministic LCG so scattered sets are reproducible across runs. */
-	function lcg(seed: number): () => number {
-		let s = seed & 0x7fffffff;
-		return () => {
-			s = (s * 1103515245 + 12345) & 0x7fffffff;
-			return s;
-		};
 	}
 
 	describe('non-front-anchored predicate deletes', () => {
@@ -148,7 +156,7 @@ describe('BTree COW delete rebalancing', () => {
 		it('a pseudo-random non-contiguous key set', () => {
 			const next = lcg(12345);
 			const drop = new Set<number>();
-			for (let i = 0; i < 70; i++) drop.add((next() % 200) + 1);
+			for (let i = 0; i < 70; i++) drop.add(lcgInt(next, 1, 201));
 			checkPredicate(200, k => drop.has(k));
 		});
 
@@ -173,10 +181,10 @@ describe('BTree COW delete rebalancing', () => {
 		it('full ordered set stays correct after every individual delete (scattered order)', () => {
 			const n = 200;
 			const { base, cow } = makeCow(n);
+			const snap = snapshotBase(base);
 
 			// Scattered deletion order so each delete hits a different structural spot.
-			const next = lcg(98765);
-			const order = range(1, n).map(k => ({ k, r: next() })).sort((a, b) => a.r - b.r).map(o => o.k);
+			const order = shuffle(range(1, n), lcg(98765));
 
 			const survivors = new Set(range(1, n));
 			for (const k of order) {
@@ -187,6 +195,8 @@ describe('BTree COW delete rebalancing', () => {
 
 				const expected = [...survivors].sort(cmp);
 				expect(liveSet(cow), `ordered set after deleting ${k}`).to.deep.equal(expected);
+				// Ownership stays intact at every structural transition (base proven pristine vs snapshot).
+				assertOwnershipInvariant(cow, base, snap);
 			}
 
 			expect(liveSet(cow), 'tree empties out cleanly').to.deep.equal([]);
@@ -200,6 +210,7 @@ describe('BTree COW delete rebalancing', () => {
 		it('deletes interior-first down to one survivor, then empty', () => {
 			const n = 150;
 			const { base, cow } = makeCow(n);
+			const snap = snapshotBase(base);
 
 			// Delete everything except the median, interior keys first (never the leftmost leaf head).
 			const keep = 75;
@@ -209,11 +220,16 @@ describe('BTree COW delete rebalancing', () => {
 			}
 			// Now only key 1 and key 75 remain.
 			expect(liveSet(cow), 'two survivors').to.deep.equal([1, keep]);
+			assertTreeInvariants(cow);
+			assertOwnershipInvariant(cow, base, snap);
 
 			expect(cow.deleteAt(cow.find(keep)), 'delete survivor 75').to.equal(true);
 			expect(liveSet(cow), 'one survivor').to.deep.equal([1]);
 			expect(cow.deleteAt(cow.find(1)), 'delete last').to.equal(true);
 			expect(liveSet(cow), 'empty').to.deep.equal([]);
+			// Drained to empty: the child still owns a (now-empty) root and the base is untouched.
+			assertTreeInvariants(cow);
+			assertOwnershipInvariant(cow, base, snap);
 
 			expect(liveSet(base), 'base untouched by full drain').to.deep.equal(range(1, n));
 		});
@@ -227,12 +243,16 @@ describe('BTree COW delete rebalancing', () => {
 			const n = 200;
 			const base = new BTree<number, number>(idFn, cmp);
 			for (let i = 1; i <= n; i++) base.insert(i);
+			const baseSnap = snapshotBase(base);
 
 			const mid = new BTree<number, number>(idFn, cmp, base);
 			// A few mid-level writes so mid owns some nodes but inherits others.
 			for (const k of [60, 120, 180]) expect(mid.deleteAt(mid.find(k)), `mid delete ${k}`).to.equal(true);
 			const midExpected = range(1, n).filter(k => ![60, 120, 180].includes(k));
 			expect(liveSet(mid), 'mid state after its own deletes').to.deep.equal(midExpected);
+			assertTreeInvariants(mid);
+			assertOwnershipInvariant(mid, base, baseSnap);	// mid's spine owns rootward; base pristine
+			const midSnap = snapshotBase(mid);
 
 			const leaf = new BTree<number, number>(idFn, cmp, mid);
 			// Non-front-anchored band delete on the grandchild — only keys actually present in
@@ -244,6 +264,11 @@ describe('BTree COW delete rebalancing', () => {
 			}
 			const leafExpected = midExpected.filter(k => !band(k));
 			expect(liveSet(leaf), 'leaf surviving set').to.deep.equal(leafExpected);
+			// The grandchild is well-formed and its spine is connected through mid (its immediate base),
+			// which in turn stays connected over base — every level isolated, both ancestors pristine.
+			assertTreeInvariants(leaf);
+			assertOwnershipInvariant(leaf, mid, midSnap);
+			assertOwnershipInvariant(mid, base, baseSnap);
 
 			// Ancestors unaffected.
 			expect(liveSet(mid), 'mid unaffected by grandchild deletes').to.deep.equal(midExpected);
@@ -265,12 +290,13 @@ describe('BTree COW delete rebalancing', () => {
 			const baseSnapshot = range(1, INITIAL);
 
 			const cow = new BTree<number, number>(idFn, cmp, base);
+			const snap = snapshotBase(base);
 			const shadow = new Set<number>(baseSnapshot);
 
 			const next = lcg(0xC0FFEE);
 			for (let op = 0; op < OPS; op++) {
-				const key = (next() % MAX_KEY) + 1;
-				const roll = next() % 100;
+				const key = lcgInt(next, 1, MAX_KEY + 1);
+				const roll = lcgInt(next, 0, 100);
 				const path = cow.find(key);
 
 				if (roll < 60) {
@@ -296,6 +322,9 @@ describe('BTree COW delete rebalancing', () => {
 					const expected = [...shadow].sort(cmp);
 					expect(liveSet(cow), `live set matches shadow @op${op}`).to.deep.equal(expected);
 					expect(collectAscending(base), `base pristine @op${op}`).to.deep.equal(baseSnapshot);
+					// Structural + ownership invariants at the sampling interval (base proven pristine vs snapshot).
+					if (hasLocalRoot(cow)) assertTreeInvariants(cow);
+					assertOwnershipInvariant(cow, base, snap);
 				}
 			}
 

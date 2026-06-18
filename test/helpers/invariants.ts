@@ -209,3 +209,159 @@ export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, op
 		throw new Error(`Count violation (rule 7): getCount() returned ${count} but traversal found ${orderedKeys.length} entries.`);
 	}
 }
+
+// ---------------------------------------------------------------------------------------------------
+// COW ownership invariant (Inheritree-specific)
+// ---------------------------------------------------------------------------------------------------
+//
+// Every node carries a `.tree` owner (src/nodes.ts). A copy-on-write child `new BTree(keyFn, cmp, base)`
+// shares its base's nodes until it needs to mutate one, at which point it clones the target and re-links
+// the clone rootward (`mutableLeaf`/`mutableBranch`/`replaceRootward`, src/b-tree.ts). The escaped
+// COW-delete bug left "an owned ancestor pointing at a stale base node" — i.e. the clone-rootward
+// linkage came apart. These helpers encode the structural rules that linkage must satisfy.
+
+/** A snapshot of a base tree captured *before* a COW child mutates, used to prove the base was untouched.
+ * Obtain one from {@link snapshotBase}; feed it to {@link assertOwnershipInvariant} after the child's ops. */
+export interface BaseSnapshot<TKey> {
+	/** The base's full ordered key list at snapshot time. */
+	readonly keys: readonly TKey[];
+	/** Identities of every node reachable from the base's root at snapshot time. COW must never add,
+	 * drop, or replace any of these. */
+	readonly nodes: ReadonlySet<ITreeNode>;
+}
+
+/** Collects the set of node object identities reachable from `root` (inclusive).
+ * The `seen` guard means an accidentally aliased/cyclic linkage is recorded once rather than looping. */
+function collectReachableNodes(root: ITreeNode | undefined): Set<ITreeNode> {
+	const seen = new Set<ITreeNode>();
+	if (!root) {
+		return seen;
+	}
+	const stack: ITreeNode[] = [root];
+	while (stack.length > 0) {
+		const node = stack.pop()!;
+		if (seen.has(node)) {
+			continue;
+		}
+		seen.add(node);
+		if (node instanceof BranchNode) {
+			for (const child of (node as BranchNode<unknown>).nodes) {
+				stack.push(child);
+			}
+		}
+	}
+	return seen;
+}
+
+/** Reads a tree's full ordered key list via the public ascending cursor (key-type-agnostic). */
+function orderedKeysOf<TKey, TEntry>(tree: BTree<TKey, TEntry>): TKey[] {
+	const keyFromEntry = (tree as any)['keyFromEntry'] as (entry: TEntry) => TKey;
+	const keys: TKey[] = [];
+	// ascending() re-yields one mutated path object, so the key must be read inside the loop.
+	for (const p of tree.ascending(tree.first())) {
+		keys.push(keyFromEntry(p.leafNode.entries[p.leafIndex]));
+	}
+	return keys;
+}
+
+/** Captures the base's ordered keys and reachable-node identities for a later immutability assertion.
+ * Call this *before* the COW child performs the operations under test. */
+export function snapshotBase<TKey, TEntry>(base: BTree<TKey, TEntry>): BaseSnapshot<TKey> {
+	return { keys: orderedKeysOf(base), nodes: collectReachableNodes(base.root) };
+}
+
+/**
+ * Validates the copy-on-write ownership invariants of a child tree against its base, throwing on the
+ * first violation. This targets the COW-delete bug class ("an owned ancestor keeps pointing at a stale
+ * base node"): it proves the child's mutable spine is a connected, base-disjoint region and — when a
+ * pre-mutation {@link BaseSnapshot} is supplied — that the base was left untouched.
+ *
+ * Checks:
+ *   1. Upward-closed ownership (connectivity). Traversing from `child.root`, once you step through a node
+ *      not owned by `child` (into base territory), no descendant may be owned by `child`. A child-owned
+ *      node beneath a base-owned ancestor means a clone was grafted below shared structure / a base node
+ *      was aliased into the child's mutable spine — the spine is no longer connected from the root.
+ *   3. No shared *mutable* node. A node the child can mutate (child-owned) must never also be reachable
+ *      from `base.root`; otherwise a child write would corrupt the base in place.
+ *   2. Base immutability (only when `snapshot` is provided). The base's ordered keys, its reachable-node
+ *      identities, and `assertTreeInvariants(base)` must all match the pre-mutation snapshot.
+ *
+ * Reaches the child's and base's roots through the public `root` getter and node `.tree` owners, so it is
+ * key-type-agnostic. Note that the dropped-write manifestation of the original bug (an *orphaned*,
+ * unreachable clone) is caught functionally by `assertTreeInvariants(child)` plus the base-immutability
+ * check here — pair the two in COW tests.
+ */
+export function assertOwnershipInvariant<TKey, TEntry>(
+	child: BTree<TKey, TEntry>,
+	base: BTree<TKey, TEntry>,
+	snapshot?: BaseSnapshot<TKey>,
+): void {
+	const childRoot = child.root;
+	const baseRoot = base.root;
+
+	// --- Check 1: ownership is upward-closed from the child's root (connectivity). ---
+	const visitConnectivity = (node: ITreeNode, crossedToBase: boolean, path: string): void => {
+		const childOwned = node.tree === child;
+		if (crossedToBase && childOwned) {
+			throw new Error(
+				`Ownership violation (connectivity) at ${path}: a node owned by the child is reachable beneath a base-owned ancestor; the copy-on-write spine must be connected from the root.`,
+			);
+		}
+		const nowCrossed = crossedToBase || !childOwned;
+		if (node instanceof BranchNode) {
+			const nodes = (node as BranchNode<TKey>).nodes;
+			for (let i = 0; i < nodes.length; i++) {
+				visitConnectivity(nodes[i], nowCrossed, `${path}.${i}`);
+			}
+		}
+	};
+	visitConnectivity(childRoot, false, 'child.root');
+
+	// --- Check 3: no shared *mutable* node. ---
+	const baseReachable = collectReachableNodes(baseRoot);
+	const visitShared = (node: ITreeNode, path: string): void => {
+		if (node.tree === child && baseReachable.has(node)) {
+			throw new Error(
+				`Ownership violation (shared mutable node) at ${path}: a child-owned node is also reachable from the base; a child write would mutate the base in place.`,
+			);
+		}
+		if (node instanceof BranchNode) {
+			const nodes = (node as BranchNode<TKey>).nodes;
+			for (let i = 0; i < nodes.length; i++) {
+				visitShared(nodes[i], `${path}.${i}`);
+			}
+		}
+	};
+	visitShared(childRoot, 'child.root');
+
+	// --- Check 2: base immutability (only when a pre-mutation snapshot was supplied). ---
+	if (snapshot) {
+		assertTreeInvariants(base);
+		const compare = (base as any)['compare'] as (a: TKey, b: TKey) => number;
+		const currentKeys = orderedKeysOf(base);
+		if (currentKeys.length !== snapshot.keys.length) {
+			throw new Error(
+				`Base mutation detected: base now has ${currentKeys.length} keys but ${snapshot.keys.length} were snapshotted before the child mutated.`,
+			);
+		}
+		for (let i = 0; i < currentKeys.length; i++) {
+			if (compare(currentKeys[i], snapshot.keys[i]) !== 0) {
+				throw new Error(
+					`Base mutation detected at key index ${i}: base key ${describeKey(currentKeys[i])} !== snapshotted key ${describeKey(snapshot.keys[i])}.`,
+				);
+			}
+		}
+		// Identity: COW must never add, drop, or replace a base node.
+		const currentNodes = collectReachableNodes(base.root);
+		if (currentNodes.size !== snapshot.nodes.size) {
+			throw new Error(
+				`Base mutation detected: base reachable-node count changed from ${snapshot.nodes.size} to ${currentNodes.size}.`,
+			);
+		}
+		for (const node of currentNodes) {
+			if (!snapshot.nodes.has(node)) {
+				throw new Error('Base mutation detected: a node reachable from base was absent from the pre-mutation snapshot (base structure was rewritten).');
+			}
+		}
+	}
+}

@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/index.js';
 import { BranchNode, LeafNode } from '../src/nodes.js';
-import { assertTreeInvariants } from './helpers/invariants.js';
+import { assertTreeInvariants, assertOwnershipInvariant, snapshotBase } from './helpers/invariants.js';
 import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 
 const MinFill = NodeCapacity >>> 1;	// 32
@@ -118,6 +118,111 @@ describe('assertTreeInvariants (validator self-test)', () => {
 			setRoot(tree, new BranchNode<number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]));
 			expect(() => assertTreeInvariants(tree)).to.not.throw();
 			expect(() => assertTreeInvariants(tree, { allowUnderfilledRoot: false })).to.throw(/rule 2/);
+		});
+	});
+});
+
+describe('assertOwnershipInvariant (COW ownership validator)', () => {
+	const idFn = (e: number): number => e;
+	const cmp = (a: number, b: number): number => a - b;
+
+	/** A multi-level base (200 > NodeCapacity forces branches) plus a fresh COW child inheriting it. */
+	function makeBase(n = 200): BTree<number, number> {
+		const base = new BTree<number, number>(idFn, cmp);
+		for (let i = 1; i <= n; i++) base.insert(i);
+		return base;
+	}
+
+	describe('accepts valid copy-on-write trees', () => {
+		it('a child with no local writes (root deferred to base)', () => {
+			const base = makeBase();
+			const child = new BTree<number, number>(idFn, cmp, base);
+			expect(() => assertOwnershipInvariant(child, base)).to.not.throw();
+		});
+
+		it('a child after a non-front-anchored interior-band delete (the rebalance path)', () => {
+			const base = makeBase();
+			const snap = snapshotBase(base);
+			const child = new BTree<number, number>(idFn, cmp, base);
+			for (let k = 51; k <= 150; k++) {
+				expect(child.deleteAt(child.find(k)), `delete ${k}`).to.equal(true);
+			}
+			// Child is internally consistent, its COW spine is connected/base-disjoint, and base is pristine.
+			expect(() => assertTreeInvariants(child)).to.not.throw();
+			expect(() => assertOwnershipInvariant(child, base, snap)).to.not.throw();
+		});
+
+		it('two independent children forked off one base each satisfy the invariant', () => {
+			const base = makeBase();
+			const snap = snapshotBase(base);
+			const a = new BTree<number, number>(idFn, cmp, base);
+			const b = new BTree<number, number>(idFn, cmp, base);
+			for (let k = 60; k <= 90; k++) a.deleteAt(a.find(k));
+			for (let k = 120; k <= 160; k++) b.deleteAt(b.find(k));
+			expect(() => assertOwnershipInvariant(a, base, snap)).to.not.throw();
+			expect(() => assertOwnershipInvariant(b, base, snap)).to.not.throw();
+		});
+	});
+
+	describe('rejects broken copy-on-write linkages', () => {
+		it('connectivity: a child-owned node grafted beneath a base-owned ancestor', () => {
+			// Simulates the documented bug manifestation — "a base node aliased into the child's mutable
+			// spine" — by hanging a freshly child-owned leaf below a base-owned branch in the child's tree.
+			const base = new BTree<number, number>(idFn, cmp);
+			const child = new BTree<number, number>(idFn, cmp, base);
+
+			const orphanClone = new LeafNode<number>([200, 201], child);				// child-owned
+			const baseBranch = new BranchNode<number>([], [orphanClone], base);			// base-owned, but holds a child clone
+			const childRoot = new BranchNode<number>(
+				[100],
+				[new LeafNode<number>([0, 1], child), baseBranch],						// child-owned root
+				child,
+			);
+			(child as any)['_root'] = childRoot;
+			expect(() => assertOwnershipInvariant(child, base)).to.throw(/connectivity/);
+		});
+
+		it('shared mutable node: a child-owned node also reachable from the base', () => {
+			// Passes connectivity (the shared node sits in child-owned territory) but a child write to it
+			// would corrupt the base, because the same object is wired into both trees.
+			const base = new BTree<number, number>(idFn, cmp);
+			const child = new BTree<number, number>(idFn, cmp, base);
+
+			const shared = new LeafNode<number>([5, 6], child);							// child-owned (mutable)
+			(child as any)['_root'] = new BranchNode<number>(
+				[100],
+				[shared, new LeafNode<number>([100, 101], base)],
+				child,
+			);
+			(base as any)['_root'] = new BranchNode<number>(
+				[100],
+				[shared, new LeafNode<number>([100, 101], base)],						// same `shared` object
+				base,
+			);
+			expect(() => assertOwnershipInvariant(child, base)).to.throw(/shared mutable node/);
+		});
+
+		it('base immutability: a base mutated after the snapshot is detected', () => {
+			const base = makeBase();
+			const snap = snapshotBase(base);
+			const child = new BTree<number, number>(idFn, cmp, base);
+			child.deleteAt(child.find(120));											// a legitimate COW op
+
+			expect(() => assertOwnershipInvariant(child, base, snap), 'pristine base passes').to.not.throw();
+
+			base.insert(99999);															// corrupt the base directly
+			expect(() => assertOwnershipInvariant(child, base, snap)).to.throw(/Base mutation/);
+		});
+
+		it('base immutability is only checked when a snapshot is supplied', () => {
+			// The 2-arg form has no "before" reference, so it cannot (and does not) flag a changed base;
+			// that is by design — callers pair it with their own base-pristine assertion or pass a snapshot.
+			const base = makeBase();
+			const snap = snapshotBase(base);
+			const child = new BTree<number, number>(idFn, cmp, base);
+			base.insert(88888);
+			expect(() => assertOwnershipInvariant(child, base)).to.not.throw();			// no snapshot: not flagged
+			expect(() => assertOwnershipInvariant(child, base, snap)).to.throw(/Base mutation/);	// snapshot: flagged
 		});
 	});
 });
