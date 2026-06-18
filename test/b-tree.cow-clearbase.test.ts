@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/b-tree.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
-import { assertTreeInvariants, sharedReachableNodes } from './helpers/invariants.js';
+import { assertTreeInvariants, reachableNodesOf, sharedReachableNodes } from './helpers/invariants.js';
 import { lcg, lcgInt } from './helpers/rng.js';
 
 /**
@@ -246,9 +246,15 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 			// PINNED REALITY (contradicts the ticket's "shares no node" hope): clearBase does not deep-copy, so
 			// untouched subtrees stay shared by identity. If clearBase ever starts deep-copying, this flips and
-			// the assertion below is the intentional, visible diff.
+			// the assertions below are the intentional, visible diff.
 			const shared = sharedReachableNodes(child, base);
 			expect(shared.length, 'flattened child still shares untouched nodes with its former base').to.be.greaterThan(0);
+
+			// Quantify it: a narrow write clones only the spine it touched, so the *vast majority* of the
+			// child's structure is still the former base's nodes — strictly stronger than "> 0", and the
+			// clearest possible evidence that clearBase is a pointer drop, not a deep copy.
+			const childNodeCount = reachableNodesOf(child).size;
+			expect(shared.length, 'most of the flattened child is still physically the former base').to.be.greaterThan(childNodeCount / 2);
 		});
 
 		it('isolation that DOES hold: after clearBase, mutating the former base in a region the child REWROTE does not affect the child', () => {
@@ -271,6 +277,42 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 			expect(child.get(REWRITTEN - 10), "base's later delete does not reach the child's owned leaf").to.not.equal(undefined);
 			expect(child.get(REWRITTEN + 1), "base's later insert does not reach the child's owned leaf").to.equal(undefined);
 			assertTreeInvariants(child);
+		});
+
+		it('clearBase on an INTERMEDIATE tree in a deep chain (base -> c1 -> c2) flattens c2 correctly and leaves c1/base intact', () => {
+			// The base->child case above exercises the mechanism, but a clearBase() called on a tree whose own
+			// base itself has a base is its own routing case worth pinning: c2.root falls through c1 to base for
+			// any path none of the three has rewritten.
+			const { base, ids: baseIds, entries: baseEntries } = makeBase(BASE_COUNT, BASE_STRIDE);
+
+			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const shadow1 = new Map<number, Entry>();
+			for (const id of baseIds) shadow1.set(id, { id, value: `base_${id}`, tag: 'base' });
+			driveOps(c1, shadow1, lcg(0xD15EA5E), 300, FLOOR, MAX_KEY, 'c1');
+			assertTreeInvariants(c1);
+
+			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const shadow2 = new Map<number, Entry>(shadow1); // c2 initially sees c1's view
+			driveOps(c2, shadow2, lcg(0x5CA1AB1E), 300, FLOOR, MAX_KEY, 'c2');
+			assertTreeInvariants(c2);
+
+			const c2IdsBefore = liveIds(c2);
+			const c2Expected = Array.from(shadow2.values()).sort(byId);
+			expect(liveSet(c2), 'c2 matches its shadow before clearBase').to.deep.equal(c2Expected);
+
+			c2.clearBase();
+
+			// c2 is now a standalone, valid tree presenting exactly its own key set.
+			expect(baseOf(c2), 'clearBase drops c2 -> c1 pointer').to.equal(undefined);
+			expect(liveIds(c2), 'clearBase preserves c2 key set').to.deep.equal(c2IdsBefore);
+			assertTreeInvariants(c2);
+			expect(liveSet(c2), 'c2 still matches its shadow after clearBase').to.deep.equal(c2Expected);
+
+			// The ancestors c2 detached from are untouched by the detach itself and remain valid.
+			assertTreeInvariants(c1);
+			assertTreeInvariants(base);
+			expect(liveSet(c1), 'c1 unchanged by c2.clearBase').to.deep.equal(Array.from(shadow1.values()).sort(byId));
+			expect(liveSet(base), 'base value-unchanged by a downstream clearBase').to.deep.equal(baseEntries);
 		});
 	});
 
