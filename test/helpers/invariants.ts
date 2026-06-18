@@ -281,10 +281,13 @@ export function snapshotBase<TKey, TEntry>(base: BTree<TKey, TEntry>): BaseSnaps
  *      not owned by `child` (into base territory), no descendant may be owned by `child`. A child-owned
  *      node beneath a base-owned ancestor means a clone was grafted below shared structure / a base node
  *      was aliased into the child's mutable spine — the spine is no longer connected from the root.
- *   3. No shared *mutable* node. A node the child can mutate (child-owned) must never also be reachable
+ *   2. No shared *mutable* node. A node the child can mutate (child-owned) must never also be reachable
  *      from `base.root`; otherwise a child write would corrupt the base in place.
- *   2. Base immutability (only when `snapshot` is provided). The base's ordered keys, its reachable-node
- *      identities, and `assertTreeInvariants(base)` must all match the pre-mutation snapshot.
+ *   3. Base immutability (only when `snapshot` is provided). The base's ordered keys and its reachable-node
+ *      identities must match the pre-mutation snapshot, and — when the base owns a local root — its
+ *      structure must still satisfy `assertTreeInvariants`. An unwritten intermediate base (a multi-level
+ *      chain `base -> c1 -> c2 ...`, validating `c2` against an untouched `c1`) has no local root and is
+ *      validated by identity/keys alone; its structure is its own base's invariant.
  *
  * Reaches the child's and base's roots through the public `root` getter and node `.tree` owners, so it is
  * key-type-agnostic. Note that the dropped-write manifestation of the original bug (an *orphaned*,
@@ -317,7 +320,7 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 	};
 	visitConnectivity(childRoot, false, 'child.root');
 
-	// --- Check 3: no shared *mutable* node. ---
+	// --- Check 2: no shared *mutable* node. ---
 	const baseReachable = collectReachableNodes(baseRoot);
 	const visitShared = (node: ITreeNode, path: string): void => {
 		if (node.tree === child && baseReachable.has(node)) {
@@ -334,9 +337,16 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 	};
 	visitShared(childRoot, 'child.root');
 
-	// --- Check 2: base immutability (only when a pre-mutation snapshot was supplied). ---
+	// --- Check 3: base immutability (only when a pre-mutation snapshot was supplied). ---
 	if (snapshot) {
-		assertTreeInvariants(base);
+		// Structural re-validation of the base is only meaningful (and only possible) when the base owns a
+		// local root. An *unwritten* COW child used as a base (multi-level chain: base -> c1 -> c2 ...,
+		// validating c2 against an untouched c1) defers entirely to its own base, so assertTreeInvariants
+		// would throw "no local root"; its structure is that base's invariant, not this one's. Immutability
+		// is still proven below via the effective-root key list and reachable-node identities.
+		if ((base as any)['_root']) {
+			assertTreeInvariants(base);
+		}
 		const compare = (base as any)['compare'] as (a: TKey, b: TKey) => number;
 		const currentKeys = orderedKeysOf(base);
 		if (currentKeys.length !== snapshot.keys.length) {

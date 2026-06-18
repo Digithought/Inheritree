@@ -162,6 +162,21 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			expect(() => assertOwnershipInvariant(a, base, snap)).to.not.throw();
 			expect(() => assertOwnershipInvariant(b, base, snap)).to.not.throw();
 		});
+
+		it('a snapshot of an UNWRITTEN intermediate base (multi-level chain base -> c1 -> c2)', () => {
+			// Regression: snapshotting an intermediate COW child that owns no local root (it defers to its
+			// own base) must not make base-immutability throw "no local root". This is the layering ticket 5
+			// is documented to use. Immutability is still enforced via effective-root keys + node identities.
+			const base = makeBase();
+			const c1 = new BTree<number, number>(idFn, cmp, base);	// never written -> no local root
+			const snapC1 = snapshotBase(c1);
+			const c2 = new BTree<number, number>(idFn, cmp, c1);
+			for (let k = 60; k <= 90; k++) c2.deleteAt(c2.find(k));
+			expect(() => assertOwnershipInvariant(c2, c1, snapC1)).to.not.throw();
+			// And it still catches a mutation of that intermediate base after the snapshot.
+			c1.insert(77777);
+			expect(() => assertOwnershipInvariant(c2, c1, snapC1)).to.throw(/Base mutation/);
+		});
 	});
 
 	describe('rejects broken copy-on-write linkages', () => {
