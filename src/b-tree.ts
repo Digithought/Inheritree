@@ -18,6 +18,17 @@ export class BTree<TKey, TEntry> {
 	/**
 	 * @param [compare=(a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0] a comparison function for keys.  The default uses < and > operators.
 	 * @param [keyFromEntry=(entry: TEntry) => entry as unknown as TKey] a function to extract the key from an entry.  The default assumes the key is the entry itself.
+	 * @param [base] an optional base tree to derive from (copy-on-write inheritance). The derived tree
+	 *   initially shares all of the base's nodes and clones them lazily as it is mutated.
+	 *
+	 *   BASE-IMMUTABILITY CONTRACT: a base must be treated as **immutable for the lifetime of its derived
+	 *   children**. The child reads any un-modified node directly from the base (see {@link root}), so
+	 *   mutating the base (insert/update/delete) while a derived child is still in use can corrupt that
+	 *   child's view of every node it still shares with the base. The fix is structural, not incidental:
+	 *   derive your children first and then leave the base frozen, or, if you need to keep mutating the
+	 *   original, mutate a *derived child* instead and treat the original base as the frozen snapshot.
+	 *   This is currently a documented contract, not a runtime guard. See also {@link clearBase}, whose
+	 *   "frozen" obligation outlives the base pointer.
 	 */
 	constructor(
 		public readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
@@ -37,6 +48,19 @@ export class BTree<TKey, TEntry> {
 		return this._root;
 	}
 
+	/**
+	 * Detaches this tree from its base, flattening it into a standalone tree. After this call the tree no
+	 * longer depends on the base object: a child that has already written keeps its cloned `_root`; an
+	 * unwritten child pins the base's current root as its own.
+	 *
+	 * IMPORTANT — this is a cheap pointer drop, NOT a deep copy. Copy-on-write only clones the nodes a
+	 * child actually mutated, so a flattened child can still SHARE every untouched subtree with its former
+	 * base by identity (an unwritten child shares the *entire* tree). Once the base pointer is gone neither
+	 * tree copies-on-write anymore, so a structural write to a shared node mutates it in place for BOTH.
+	 * The base-immutability contract therefore outlives this call: after `clearBase()`, treat the former
+	 * base as frozen — in practice, discard it. If you genuinely need two independently-mutable trees,
+	 * build a fresh tree and re-insert, rather than relying on `clearBase` to isolate shared structure.
+	 */
 	clearBase() {
 		this._root = this._root ?? this.base?.root;
 		this.base = undefined;

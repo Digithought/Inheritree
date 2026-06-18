@@ -270,6 +270,33 @@ export function snapshotBase<TKey, TEntry>(base: BTree<TKey, TEntry>): BaseSnaps
 	return { keys: orderedKeysOf(base), nodes: collectReachableNodes(base.root) };
 }
 
+/** Every node identity reachable from a tree's *effective* root (the public `root` getter, which falls
+ * through a COW child to its base). The companion to {@link sharedReachableNodes} for structural-sharing
+ * assertions — e.g. proving that `clearBase` does (or does not) leave nodes shared with the former base. */
+export function reachableNodesOf<TKey, TEntry>(tree: BTree<TKey, TEntry>): Set<ITreeNode> {
+	return collectReachableNodes(tree.root);
+}
+
+/**
+ * The node identities reachable from BOTH trees' effective roots — i.e. the structure they physically share.
+ *
+ * Copy-on-write only clones nodes along a *mutated* path; untouched subtrees stay shared by identity. So a
+ * derived child shares part of its base's structure, and — because `clearBase` merely drops the base pointer
+ * rather than deep-copying — a *flattened* child can still share untouched nodes with its former base. A
+ * non-empty result is exactly why a base (or former base) must be treated as frozen while such sharing is
+ * live: mutating a shared node in place corrupts the other tree's view of it.
+ */
+export function sharedReachableNodes<TKey, TEntry>(a: BTree<TKey, TEntry>, b: BTree<TKey, TEntry>): ITreeNode[] {
+	const aNodes = collectReachableNodes(a.root);
+	const shared: ITreeNode[] = [];
+	for (const node of collectReachableNodes(b.root)) {
+		if (aNodes.has(node)) {
+			shared.push(node);
+		}
+	}
+	return shared;
+}
+
 /**
  * Validates the copy-on-write ownership invariants of a child tree against its base, throwing on the
  * first violation. This targets the COW-delete bug class ("an owned ancestor keeps pointing at a stale

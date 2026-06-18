@@ -99,9 +99,19 @@ Via pnpm/yarn:
     console.log(derivedTree.at(path)); // Will show 15, 20
   }
 
-  // To make the derived tree independent (flattening its state):
+  // To detach the derived tree from its base (flattening its state):
   derivedTree.clearBase();
 ```
+
+##### Base immutability contract
+
+A derived tree reads any un-modified node **directly from its base** — copy-on-write only clones the nodes a child actually mutates. This has one important consequence:
+
+> **Treat a base as immutable for the lifetime of its derived children.** Derive your children first, then do not insert/update/delete on the base while any derived child is still in use. Mutating the base can corrupt every child's view of the nodes it still shares with that base. If you need to keep mutating the original, mutate a *derived child* instead and leave the base frozen.
+
+`clearBase()` detaches a child from its base cheaply — it drops the base pointer, it does **not** deep-copy. A flattened child can therefore still *share* untouched nodes with its former base (an unwritten child shares the entire tree), and once detached neither tree copies-on-write any longer. So the same rule outlives `clearBase()`: after calling it, treat the former base as frozen (in practice, discard it). If you genuinely need two independently-mutable trees from the same data, build a fresh tree and re-insert rather than relying on `clearBase` to isolate shared structure.
+
+This contract is currently documented, not enforced at runtime (see *Help wanted* below).
 
 
 #### See [Reference Documentation](https://digithought.github.io/Inheritree/)
@@ -141,7 +151,7 @@ Bug fixes, architectural enhancements, and speed improvement suggestions are wel
 
 #### Help wanted
 
-TODO: need version checking against base tree; right now, the base table is assumed to be immutable.
+TODO: need version checking against base tree; right now, the base is assumed to be immutable while it has live derived children (see the *Base immutability contract* above). A runtime guard — e.g. a version/`hasChildren` check that throws when a base is mutated while derived — would turn that documented contract into an enforced one.
 
 * Benchmark suite
 * Better insulation of path's internals
