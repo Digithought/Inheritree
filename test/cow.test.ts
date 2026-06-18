@@ -1,6 +1,8 @@
 import { expect } from 'chai';
-import { BTree } from '../src/b-tree.js';
+import { BTree, NodeCapacity } from '../src/b-tree.js';
 import { LeafNode } from '../src/nodes.js'; // For type checking if needed, or tree.first().on check
+import { assertTreeInvariants, assertOwnershipInvariant, snapshotBase } from './helpers/invariants.js';
+import { lcg, lcgInt } from './helpers/rng.js';
 
 // Helper function to retrieve all entries from a tree in order
 function getAllEntries<TKey, TEntry>(
@@ -322,98 +324,153 @@ describe('BTree Copy-on-Write (COW) Functionality', () => {
         origin: 'base' | 'derived';
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Hardened randomized COW stress test.
+    //
+    // The prior version of this block was structurally unable to exercise the COW delete-rebalance bug
+    // (the one fixed in `Fix COW delete rebalancing: link clones into owned ancestors`):
+    //   - INITIAL_BASE_SIZE (50) was BELOW NodeCapacity (64), so `base` was a single leaf that never
+    //     rebalanced. The bug only occurs in a MULTI-LEVEL tree, where a borrowed/merged sibling is
+    //     still owned by `base` while the deleted leaf has already been cloned into the child.
+    //   - it used unseeded `Math.random()`, so a failure could not be reproduced.
+    //   - it verified ascending-only and only diffed the shadow `Map` at the very end, so a
+    //     phantom-repeat / dropped key on the reverse direction could slip through.
+    //
+    // This version builds a genuinely multi-level base of object entries, drives a SEEDED,
+    // DELETE-BIASED op stream whose deletes hit INTERIOR (non-front-anchored) keys, and after every
+    // op (sampled at a tight interval) asserts the structural + ownership invariants and bidirectional
+    // set-equality vs the shadow `Map` — with `base` proven pristine throughout, not just at the end.
+    // See test/b-tree.cow-delete.test.ts's header for why front-anchored deletes dodge the bug.
     describe('Randomized Operations Stress Test', () => {
-        const NUM_OPERATIONS = 2000; // Number of random operations
-        const MAX_KEY_VALUE = 1000;   // Max value for keys
-        const INITIAL_BASE_SIZE = 50;
-
-        let base: BTree<number, Entry>;
-        let derived: BTree<number, Entry>;
-        let shadowMap: Map<number, Entry>; // Mirrors derived tree state
-        let baseSnapshot: Array<Entry>; // To ensure base doesn't change
-
         const keyExtractor = (item: Entry) => item.id;
 
-        beforeEach(() => {
-            base = new BTree(keyExtractor);
-            shadowMap = new Map();
+        const INITIAL_BASE_SIZE = 400;                     // well above NodeCapacity (64) => a multi-level base
+        const MAX_KEY_VALUE = INITIAL_BASE_SIZE * 2;       // leave room for inserts to interleave with the base keys
+        const NUM_OPERATIONS = 1500;
+        const CHECK_INTERVAL = 20;                         // sample the O(n) invariant assertions (per-op is too slow)
+        const MULTI_LEVEL_FLOOR = NodeCapacity * 3;        // keep the tree comfortably multi-level: force inserts below this
+        // Fixed seeds => deterministic & reproducible. The seed is embedded in the test title and every
+        // assertion message, so a CI failure names the exact stream that produced it.
+        const SEEDS = [0xC0FFEE, 0x9E3779B1, 0xBADF00D];
 
-            // Populate base tree and shadow map (for base state)
+        /** A deterministic, genuinely multi-level base of object entries (odd ids 1..2N-1). */
+        function makeBase(): BTree<number, Entry> {
+            const base = new BTree<number, Entry>(keyExtractor);
             for (let i = 0; i < INITIAL_BASE_SIZE; i++) {
-                const id = Math.floor(Math.random() * MAX_KEY_VALUE);
-                if (!base.get(id)) { // Avoid duplicate keys in initial setup for simplicity
-                    const item = { id, value: `base_val_${id}`, origin: 'base' as 'base' };
-                    base.insert(item);
-                }
+                const id = i * 2 + 1;
+                const item: Entry = { id, value: `base_val_${id}`, origin: 'base' };
+                base.insert(item);
             }
-            baseSnapshot = getAllEntries(base, keyExtractor).map(entry => ({...entry})); // Deep copy for later comparison
+            return base;
+        }
 
-            derived = new BTree(keyExtractor, undefined, base);
-            // Populate shadowMap with initial state from base for derived tree
-            baseSnapshot.forEach(item => shadowMap.set(item.id, {...item}));
-        });
+        /** Whether the COW child owns a local root yet (false while it still defers entirely to its base). */
+        function hasLocalRoot(tree: BTree<number, Entry>): boolean {
+            return Boolean((tree as any)['_root']);
+        }
 
-        it(`should maintain B-tree properties and COW isolation over ${NUM_OPERATIONS} random operations`, () => {
-            for (let i = 0; i < NUM_OPERATIONS; i++) {
-                const operationType = Math.random();
-                const randomId = Math.floor(Math.random() * MAX_KEY_VALUE);
-
-                if (operationType < 0.4) { // INSERT (40% chance)
-                    const newItem = { id: randomId, value: `val_${randomId}_op${i}`, origin: 'derived' as 'derived' };
-                    const path = derived.find(randomId);
-                    if (!path.on) { // Key doesn't exist
-                        derived.insert(newItem);
-                        shadowMap.set(randomId, newItem);
-                    } else { // Key exists, treat as an implicit upsert for simplicity in this test
-                        const existingItem = derived.at(path)!;
-                        const updatedItem = { ...existingItem, value: `upsert_val_${randomId}_op${i}`, origin: 'derived' as 'derived' };
-                        derived.updateAt(path, updatedItem);
-                        shadowMap.set(randomId, updatedItem);
-                    }
-                } else if (operationType < 0.7 && shadowMap.size > 0) { // UPDATE (30% chance, if map not empty)
-                    // Pick a random existing key from shadowMap to ensure we update something that *should* be in derived
-                    const keys = Array.from(shadowMap.keys());
-                    const idToUpdate = keys[Math.floor(Math.random() * keys.length)];
-                    const currentItem = shadowMap.get(idToUpdate)!;
-                    const updatedItem = {
-                        ...currentItem,
-                        value: `updated_val_${idToUpdate}_op${i}`,
-                        // If it was from base, its origin changes to derived upon first update in derived tree
-                        origin: 'derived' as 'derived'
-                    };
-                    const pathToUpdate = derived.find(idToUpdate);
-                    if (pathToUpdate.on) {
-                        derived.updateAt(pathToUpdate, updatedItem);
-                        shadowMap.set(idToUpdate, updatedItem);
-                    } else {
-                        // This should ideally not happen if shadowMap is in sync
-                        console.warn(`Stress test: Attempted to update non-existent key ${idToUpdate} in derived tree. Shadow map might be out of sync.`);
-                    }
-                } else if (shadowMap.size > 0) { // DELETE (30% chance, if map not empty)
-                    const keys = Array.from(shadowMap.keys());
-                    const idToDelete = keys[Math.floor(Math.random() * keys.length)];
-                    const pathToDelete = derived.find(idToDelete);
-                    if (pathToDelete.on) {
-                        derived.deleteAt(pathToDelete);
-                        shadowMap.delete(idToDelete);
-                    } else {
-                        // This should ideally not happen
-                        console.warn(`Stress test: Attempted to delete non-existent key ${idToDelete} in derived tree. Shadow map might be out of sync.`);
-                    }
-                }
-
-                // Periodically (or at the end) verify base tree integrity
-                if (i % (NUM_OPERATIONS / 10) === 0 || i === NUM_OPERATIONS - 1) {
-                     expect(getAllEntries(base, keyExtractor)).to.deep.equal(baseSnapshot, `Base tree changed at operation ${i}`);
-                }
+        /** Collect entries via descending iteration, returned ascending so it can be compared to the ascending walk. */
+        function collectDescending(tree: BTree<number, Entry>): Entry[] {
+            const out: Entry[] = [];
+            for (const path of tree.descending(tree.last())) {
+                const entry = tree.at(path);
+                if (entry !== undefined) out.push(entry);
             }
+            return out.reverse();
+        }
 
-            // Final verification
-            const expectedDerivedEntries = Array.from(shadowMap.values()).sort((a, b) => keyExtractor(a) - keyExtractor(b));
-            const actualDerivedEntries = getAllEntries(derived, keyExtractor);
+        /** Both iteration directions must agree on the exact same ordered set (an ascending-only walk would
+         * miss a phantom-repeat / drop that only shows on the reverse). Returns the ascending entry list. */
+        function liveSetBidirectional(tree: BTree<number, Entry>, ctx: string): Entry[] {
+            const asc = getAllEntries(tree, keyExtractor);
+            const desc = collectDescending(tree);
+            expect(desc, `descending iteration agrees with ascending ${ctx}`).to.deep.equal(asc);
+            return asc;
+        }
 
-            expect(actualDerivedEntries).to.deep.equal(expectedDerivedEntries, 'Derived tree does not match shadow map at the end');
-            expect(getAllEntries(base, keyExtractor)).to.deep.equal(baseSnapshot, 'Base tree changed by the end of operations');
-        });
+        for (const seed of SEEDS) {
+            it(`maintains COW structure & isolation over ${NUM_OPERATIONS} delete-biased ops [seed 0x${seed.toString(16)}]`, function () {
+                this.timeout(20000);
+
+                const tag = `[seed 0x${seed.toString(16)}]`;
+                const rng = lcg(seed);
+
+                const base = makeBase();
+                expect(base.getCount(), `${tag} base must be multi-level`).to.be.greaterThan(NodeCapacity);
+                assertTreeInvariants(base);
+                const baseEntries = getAllEntries(base, keyExtractor).map(e => ({ ...e })); // deep copy for value-level pristine checks
+
+                const derived = new BTree<number, Entry>(keyExtractor, undefined, base);
+                const snap = snapshotBase(base);  // capture base BEFORE any COW write, for the ownership invariant
+
+                // Shadow Map mirrors the expected derived state; seed it with the base's entries.
+                const shadow = new Map<number, Entry>();
+                baseEntries.forEach(e => shadow.set(e.id, { ...e }));
+
+                const verify = (op: number) => {
+                    const ctx = `${tag} @op${op}`;
+                    // Derived child: structural well-formedness + connected, base-disjoint mutable spine.
+                    if (hasLocalRoot(derived)) assertTreeInvariants(derived);
+                    // Ownership also re-validates the base's structure & proves its keys/node-identities match the snapshot.
+                    assertOwnershipInvariant(derived, base, snap);
+
+                    // Bidirectional set-equality vs the shadow Map.
+                    const actual = liveSetBidirectional(derived, ctx);
+                    const expected = Array.from(shadow.values()).sort((a, b) => keyExtractor(a) - keyExtractor(b));
+                    expect(actual, `derived matches shadow ${ctx}`).to.deep.equal(expected);
+
+                    // Base stays pristine throughout (value-level), not just at the end.
+                    expect(getAllEntries(base, keyExtractor), `base unchanged ${ctx}`).to.deep.equal(baseEntries);
+                };
+
+                for (let i = 0; i < NUM_OPERATIONS; i++) {
+                    let roll = lcgInt(rng, 0, 100);
+                    // Keep the tree comfortably multi-level so deletes keep provoking real multi-level rebalance.
+                    if (shadow.size <= MULTI_LEVEL_FLOOR) roll = 99; // force an INSERT
+
+                    if (roll < 50 && shadow.size >= 2) {
+                        // DELETE (delete-biased: the path the COW bug lived in). Hit an INTERIOR key — never the
+                        // current minimum — because a front-anchored delete only ever borrows/merges with its
+                        // RIGHT sibling and dodges the bug (see test/b-tree.cow-delete.test.ts header).
+                        const sortedKeys = Array.from(shadow.keys()).sort((a, b) => a - b);
+                        const idToDelete = sortedKeys[lcgInt(rng, 1, sortedKeys.length)]; // index >= 1 => non-front-anchored
+                        const path = derived.find(idToDelete);
+                        expect(path.on, `${tag} key ${idToDelete} present before delete @op${i}`).to.equal(true);
+                        expect(derived.deleteAt(path), `${tag} deleteAt ${idToDelete} @op${i}`).to.equal(true);
+                        shadow.delete(idToDelete);
+                    } else if (roll < 65 && shadow.size > 0) {
+                        // UPDATE: re-value an existing key. A base-origin entry becomes derived-owned on first write.
+                        const keys = Array.from(shadow.keys());
+                        const idToUpdate = keys[lcgInt(rng, 0, keys.length)];
+                        const updated: Entry = { id: idToUpdate, value: `upd_${idToUpdate}_op${i}`, origin: 'derived' };
+                        const path = derived.find(idToUpdate);
+                        expect(path.on, `${tag} key ${idToUpdate} present before update @op${i}`).to.equal(true);
+                        derived.updateAt(path, updated);
+                        shadow.set(idToUpdate, updated);
+                    } else {
+                        // INSERT a key not currently present.
+                        let id = lcgInt(rng, 0, MAX_KEY_VALUE);
+                        for (let tries = 0; tries < 16 && shadow.has(id); tries++) {
+                            id = lcgInt(rng, 0, MAX_KEY_VALUE);
+                        }
+                        if (!shadow.has(id)) {
+                            const item: Entry = { id, value: `ins_${id}_op${i}`, origin: 'derived' };
+                            const path = derived.find(id);
+                            expect(path.on, `${tag} key ${id} absent before insert @op${i}`).to.equal(false);
+                            derived.insert(item);
+                            shadow.set(id, item);
+                        }
+                    }
+
+                    if (i % CHECK_INTERVAL === 0 || i === NUM_OPERATIONS - 1) verify(i);
+                }
+
+                // Final full verification.
+                const finalExpected = Array.from(shadow.values()).sort((a, b) => keyExtractor(a) - keyExtractor(b));
+                expect(liveSetBidirectional(derived, `${tag} final`), `${tag} final derived matches shadow`).to.deep.equal(finalExpected);
+                expect(derived.getCount(), `${tag} derived count matches shadow`).to.equal(shadow.size);
+                expect(getAllEntries(base, keyExtractor), `${tag} base pristine at end`).to.deep.equal(baseEntries);
+            });
+        }
     });
 });
