@@ -472,6 +472,12 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 			expect(leafForKey(base, minFillKey).entries.length, 'delete side targets a min-fill leaf').to.equal(NodeCapacity >>> 1);
 			expect(leafForKey(base, freshInFull)).to.not.equal(leafForKey(base, minFillKey));
 
+			// Capture the base-owned insert-side leaf so we can prove post-hoc that the split actually fired —
+			// not merely that invariants happen to hold afterward (guards against a future refactor that changes
+			// the precondition semantics and silently stops splitting). The robust signal is independent of
+			// whether the delete side borrows or merges.
+			const fullLeafBefore = leafForKey(base, freshInFull);
+
 			const path = cow.find(minFillKey);
 			expect(path.on, 'old key present').to.equal(true);
 
@@ -485,6 +491,17 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 			const expected = ids.filter(k => k !== minFillKey).concat(freshInFull).sort(cmp);
 			expect(liveIds(cow), 'live set is base − minFillKey + freshInFull').to.deep.equal(expected);
+
+			// Explicit proof the insert side actually SPLIT the full leaf (not just that invariants happen to
+			// hold): the child's leaf now holding freshInFull is a fresh child-owned node, distinct from the
+			// base's still-full leaf, and is itself below capacity (the 64-entry leaf was divided). The base's
+			// original leaf is untouched at capacity. This is robust regardless of how the delete side rebalances.
+			const splitLeaf = leafForKey(cow, freshInFull);
+			expect(splitLeaf.tree, 'split produced a child-owned leaf').to.equal(cow);
+			expect(splitLeaf, 'split leaf is a clone, not the base leaf').to.not.equal(fullLeafBefore);
+			expect(splitLeaf.entries.length, 'the full (64) leaf was split, so its halves are below capacity').to.be.lessThan(NodeCapacity);
+			expect(fullLeafBefore.entries.length, 'base full leaf untouched at capacity').to.equal(NodeCapacity);
+			expect(fullLeafBefore.tree, 'base full leaf still base-owned').to.equal(base);
 
 			// The heaviest path must leave the child well-formed, its spine connected & base-disjoint, base pristine.
 			assertTreeInvariants(cow);
