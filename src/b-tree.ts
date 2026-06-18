@@ -677,7 +677,7 @@ export class BTree<TKey, TEntry> {
 
 		const rightSib = pNode.nodes[pIndex + 1] as BranchNode<TKey> | undefined;
 		if (rightSib && rightSib.nodes.length > (NodeCapacity >>> 1)) {   // Attempt to borrow from right sibling
-			const rightMutable = this.mutableBranch([...path.branches.slice(0, depth), new PathBranch(rightSib, pIndex + 1)], path);
+			const rightMutable = this.mutableBranch(branchSibSegments(path, depth, rightSib, 1), path);
 			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
 			branchMutable.partitions.push(pNode.partitions[pIndex]);
 			const node = rightMutable.nodes.shift()!;
@@ -689,7 +689,7 @@ export class BTree<TKey, TEntry> {
 
 		const leftSib = pNode.nodes[pIndex - 1] as BranchNode<TKey> | undefined;
 		if (leftSib && leftSib.nodes.length > (NodeCapacity >>> 1)) {   // Attempt to borrow from left sibling
-			const leftMutable = this.mutableBranch([...path.branches.slice(0, depth), new PathBranch(leftSib, pIndex - 1)], path);
+			const leftMutable = this.mutableBranch(branchSibSegments(path, depth, leftSib, -1), path);
 			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
 			branchMutable.partitions.unshift(pNode.partitions[pIndex - 1]);
 			const node = leftMutable.nodes.pop()!;
@@ -716,7 +716,7 @@ export class BTree<TKey, TEntry> {
 
 		if (leftSib && leftSib.nodes.length + branch.nodes.length <= NodeCapacity) {   // Attempt to merge self into left sibling
 			const pMutable = this.mutableBranch(path.branches.slice(0, depth), path);
-			const leftMutable = this.mutableBranch([...path.branches.slice(0, depth), new PathBranch(leftSib, pIndex - 1)], path);
+			const leftMutable = this.mutableBranch(branchSibSegments(path, depth, leftSib, -1), path);
 			pathBranch.node = leftMutable;
 			pathBranch.index += leftMutable.nodes.length;
 			const pKey = pMutable.partitions.splice(pIndex - 1, 1)[0];
@@ -808,6 +808,26 @@ function leafSibPath<TKey, TEntry>(path: Path<TKey, TEntry>, sib: LeafNode<TEntr
 		branches[branches.length - 1].index += delta;
 	}
 	return new Path<TKey, TEntry>(branches, sib, path.leafIndex + delta, path.on, path.version);
+}
+
+/**
+ * Builds the branch-segment list addressing a *sibling* of the underflowing branch at `path.branches[depth]`,
+ * for a copy-on-write `mutableBranch` clone during a branch borrow/merge. The parent of both the underflowing
+ * branch and its sibling is `path.branches[depth - 1]`, whose index addresses the *underflowing* branch's slot
+ * (`pIndex`). The sibling lives at `pIndex + delta` (+1 right, -1 left), so the cloned parent segment's index
+ * must be shifted by `delta` — otherwise `replaceRootward`, on reaching the (already-owned) parent, would link
+ * the freshly-cloned sibling into the underflowing branch's slot, clobbering it and orphaning a whole subtree.
+ *
+ * This is the branch-level analogue of {@link leafSibPath} (the leaf-level borrow/merge); the original inline
+ * construction shifted the *sibling* segment's index instead of the *parent's*, which `replaceRootward` never
+ * reads (the sibling is the deepest segment), so the shift had no effect and the corruption escaped. The
+ * sibling's own appended index is unused by the clone and is left at 0.
+ */
+function branchSibSegments<TKey, TEntry>(path: Path<TKey, TEntry>, depth: number, sib: BranchNode<TKey>, delta: number): PathBranch<TKey>[] {
+	const segments = path.branches.slice(0, depth).map(b => b.clone());
+	segments[depth - 1].index += delta;	// parent now addresses the sibling, not the underflowing branch
+	segments.push(new PathBranch(sib, 0));
+	return segments;
 }
 
 class Split<TKey> {
