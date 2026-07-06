@@ -354,4 +354,61 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			expect(solo.at(solo.prior(end)), 'prior back onto 3').to.equal(3);
 		});
 	});
+
+	describe('range() end-by-position in a 3-level tree (§3.4)', () => {
+		// The 2-level suite proves the (leafNode, leafIndex) match fires in a sibling leaf; the comparator-count
+		// suite runs only at 2-level (n<=500). Nothing above exercised a *bounded* range() whose forward/backward
+		// scan crosses a level-2 (cross-branch) boundary before the position match terminates it - the handoff
+		// flagged this as only implicitly covered. Pin it explicitly in both directions on a genuine 3-level tree.
+		const count = NodeCapacity * NodeCapacity + 1;	// 4097 -> 3 levels
+		let tree: BTree<number, number>;
+		beforeEach(() => {
+			tree = buildSeq(count);
+			const root = (tree as any)['_root'];
+			expect(root instanceof BranchNode && root.nodes[0] instanceof BranchNode, 'genuinely 3-level').to.be.true;
+		});
+
+		it('ascending bounded range spanning many leaves stops exactly at the end position', () => {
+			// A wide span (guaranteed to cross leaf and at least one cross-branch boundary) must terminate at 2100,
+			// not overshoot to the end of the tree - the whole point of the fixed end-position match.
+			const out = rangeValues(tree, new KeyRange(new KeyBound(2000), new KeyBound(2100)));
+			expect(out).to.deep.equal([...Array(101).keys()].map(i => i + 2000));
+		});
+
+		it('descending bounded range spanning many leaves stops exactly at the end position', () => {
+			const out = rangeValues(tree, new KeyRange(new KeyBound(2100), new KeyBound(2000), false));
+			expect(out).to.deep.equal([...Array(101).keys()].map(i => 2100 - i));
+		});
+
+		it('exclusive bounds inside a 3-level tree still land one in from each end', () => {
+			expect(rangeValues(tree, new KeyRange(new KeyBound(500, false), new KeyBound(505, false))))
+				.to.deep.equal([501, 502, 503, 504]);
+			expect(rangeValues(tree, new KeyRange(new KeyBound(505, false), new KeyBound(500, false), false)))
+				.to.deep.equal([504, 503, 502, 501]);
+		});
+	});
+
+	describe('start-past-end guard honors a custom comparator (§3.4)', () => {
+		// The empty-region tests above all use the default numeric comparator. The up-front guard calls the *user*
+		// comparator (via compareKeys), so an inverted range under a reverse-order comparator must be caught the same
+		// way - and a well-formed range under it must still yield in that comparator's order.
+		const reverse = () => new BTree<number, number>(k => k, (a, b) => a > b ? -1 : a < b ? 1 : 0);
+		let tree: BTree<number, number>;
+		beforeEach(() => {
+			tree = reverse();
+			for (let i = 0; i < 40; i++) tree.insert(i);	// stored in reverse order: 39, 38, ... 0
+		});
+
+		it('a well-formed ascending range under a reverse comparator yields in comparator order', () => {
+			// "Ascending" = comparator order = descending numerically. Bounds are first=high-in-comparator (10) to
+			// last=low-in-comparator (5): under reverse order 10 precedes 5, so this is well-formed and yields 10..5.
+			expect(rangeValues(tree, new KeyRange(new KeyBound(10), new KeyBound(5)))).to.deep.equal([10, 9, 8, 7, 6, 5]);
+		});
+
+		it('an inverted range under a reverse comparator is caught by the guard (empty)', () => {
+			// first=5, last=10: under reverse order 5 comes *after* 10, so start is already past end -> the guard
+			// must return empty (a per-element numeric compare would be wrong here; only the user comparator decides).
+			expect(rangeValues(tree, new KeyRange(new KeyBound(5), new KeyBound(10)))).to.deep.equal([]);
+		});
+	});
 });
