@@ -66,20 +66,33 @@ export class BTree<TKey, TEntry> {
 		const endPath = range.last
 			? this.findLast(range)
 			: (range.isAscending ? this.last() : this.first());
-		// Only compute endKey if endPath is on an entry; otherwise the loop will exit early anyway
-		const endKey = endPath.on ? this.keyFromEntry(endPath.leafNode.entries[endPath.leafIndex]) : undefined;
+		if (!startPath.on || !endPath.on) {
+			return;	// no reachable start or end entry -> empty range
+		}
+		const ascendingFactor = range.isAscending ? 1 : -1;
+		// The end position (endPath) is fixed before iteration, and the scan is strictly sequential, so the
+		// per-element stop test is a (leafNode, leafIndex) match - no user comparator per element. The one case
+		// position alone can't catch is start already past end (an ill-formed range like ascending first > last,
+		// or an all-crack empty region where both bounds step to opposite sides): rule it out with a single
+		// up-front comparison - the same test the old loop applied to its first element, just hoisted out.
+		const startKey = this.keyFromEntry(startPath.leafNode.entries[startPath.leafIndex]);
+		const endKey = this.keyFromEntry(endPath.leafNode.entries[endPath.leafIndex]);
+		if (this.compareKeys(startKey, endKey) * ascendingFactor > 0) {
+			return;	// start already past end -> empty range
+		}
+		const endLeaf = endPath.leafNode;
+		const endIndex = endPath.leafIndex;
 		const iterable = range.isAscending
 			? this.internalAscending(startPath)
 			: this.internalDescending(startPath);
-		const ascendingFactor = range.isAscending ? 1 : -1;
-		for (let path of iterable) {
-			if (!path.on || !endPath.on || this.compareKeys(
-				this.keyFromEntry(path.leafNode.entries[path.leafIndex]),
-				endKey!
-			) * ascendingFactor > 0) {
+		for (const path of iterable) {
+			if (!path.on) {
 				break;
 			}
 			yield path;
+			if (path.leafNode === endLeaf && path.leafIndex === endIndex) {
+				break;	// reached the fixed end position (inclusive); bound inclusivity is baked into endPath
+			}
 		}
 	}
 
@@ -289,17 +302,19 @@ export class BTree<TKey, TEntry> {
 
 
 	private getPath(node: ITreeNode, key: TKey): Path<TKey, TEntry> {
-		if (node instanceof LeafNode) {
-			const leaf = node as LeafNode<TEntry>;
-			const [on, index] = this.indexOfEntry(leaf.entries, key);
-			return new Path<TKey, TEntry>([], leaf, index, on, this._version);
-		} else {
-			const branch = node as BranchNode<TKey>;
+		// Descend top-down, pushing each branch in root->leaf order (already the order Path.branches wants),
+		// so no unshift/reversal is needed and building an N-level path costs O(depth), not O(depth^2).
+		const branches: PathBranch<TKey>[] = [];
+		let current = node;
+		while (!(current instanceof LeafNode)) {
+			const branch = current as BranchNode<TKey>;
 			const index = this.indexOfKey(branch.partitions, key);
-			const path = this.getPath(branch.nodes[index], key);
-			path.branches.unshift(new PathBranch(branch, index));
-			return path;
+			branches.push(new PathBranch(branch, index));
+			current = branch.nodes[index];
 		}
+		const leaf = current as LeafNode<TEntry>;
+		const [on, index] = this.indexOfEntry(leaf.entries, key);
+		return new Path<TKey, TEntry>(branches, leaf, index, on, this._version);
 	}
 
 	private indexOfEntry(entries: TEntry[], key: TKey): [on: boolean, index: number] {
@@ -369,7 +384,7 @@ export class BTree<TKey, TEntry> {
 				path.leafIndex = path.leafNode.entries.length;	// after last row = end crack
 				path.on = false;
 			} else {
-				path.branches.splice(-popCount, popCount);
+				path.branches.length -= popCount;	// truncate in place; the discarded splice result was pure garbage
 				const branch = path.branches.at(-1)!;
 				++branch.index;
 				this.moveToFirst(branch.node.nodes[branch.index], path);
@@ -399,7 +414,7 @@ export class BTree<TKey, TEntry> {
 				path.leafIndex = 0;
 				path.on = false;
 			} else {
-				path.branches.splice(-popCount, popCount);
+				path.branches.length -= popCount;	// truncate in place; the discarded splice result was pure garbage
 				const branch = path.branches.at(-1)!;
 				--branch.index;
 				this.moveToLast(branch.node.nodes[branch.index], path);
@@ -505,30 +520,32 @@ export class BTree<TKey, TEntry> {
 
 	/** Construct a path based on the first-most edge of the given. */
 	private getFirst(node: ITreeNode): Path<TKey, TEntry> {
-		if (node instanceof LeafNode) {
-			const leaf = node as LeafNode<TEntry>;
-			return new Path<TKey, TEntry>([], leaf, 0, leaf.entries.length > 0, this._version)
-		} else {
-			const branch = node as BranchNode<TKey>;
-			const path = this.getFirst(branch.nodes[0]);
-			path.branches.unshift(new PathBranch(branch, 0));
-			return path;
+		// Top-down descent along nodes[0]; push each branch in root->leaf order (see getPath) - O(depth), no unshift.
+		const branches: PathBranch<TKey>[] = [];
+		let current = node;
+		while (!(current instanceof LeafNode)) {
+			const branch = current as BranchNode<TKey>;
+			branches.push(new PathBranch(branch, 0));
+			current = branch.nodes[0];
 		}
+		const leaf = current as LeafNode<TEntry>;
+		return new Path<TKey, TEntry>(branches, leaf, 0, leaf.entries.length > 0, this._version);
 	}
 
 	/** Construct a path based on the last-most edge of the given node */
 	private getLast(node: ITreeNode): Path<TKey, TEntry> {
-		if (node instanceof LeafNode) {
-			const leaf = node as LeafNode<TEntry>;
-			const count = leaf.entries.length;
-			return new Path<TKey, TEntry>([], leaf, count > 0 ? count - 1 : 0, count > 0, this._version);
-		} else {
-			const branch = node as BranchNode<TKey>;
+		// Top-down descent along the last child; push each branch in root->leaf order (see getPath) - O(depth), no unshift.
+		const branches: PathBranch<TKey>[] = [];
+		let current = node;
+		while (!(current instanceof LeafNode)) {
+			const branch = current as BranchNode<TKey>;
 			const index = branch.nodes.length - 1;
-			const path = this.getLast(branch.nodes[index]);
-			path.branches.unshift(new PathBranch(branch, index));
-			return path;
+			branches.push(new PathBranch(branch, index));
+			current = branch.nodes[index];
 		}
+		const leaf = current as LeafNode<TEntry>;
+		const count = leaf.entries.length;
+		return new Path<TKey, TEntry>(branches, leaf, count > 0 ? count - 1 : 0, count > 0, this._version);
 	}
 
 	private leafInsert(path: Path<TKey, TEntry>, entry: TEntry): Split<TKey> | undefined {
