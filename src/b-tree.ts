@@ -348,10 +348,12 @@ export class BTree<TKey, TEntry> {
 		if (!path.on) {	// Attempt to move off of crack
 			path.on = path.branches.every(branch => branch.index >= 0 && branch.index < branch.node.nodes.length)
 				&& path.leafIndex >= 0 && path.leafIndex < path.leafNode.entries.length;
-			if (path.on) {
-				return;
+			if (path.on || path.leafIndex < path.leafNode.entries.length) {
+				return;	// recovered onto an entry, or crack precedes an entry in this leaf
 			}
-		} else if (path.leafIndex >= path.leafNode.entries.length - 1) {
+			// end-of-leaf crack (leafIndex === entries.length): fall through to advance into the next leaf
+		}
+		if (path.leafIndex >= path.leafNode.entries.length - (path.on ? 1 : 0)) {
 			let popCount = 0;
 			let found = false;
 			const last = path.branches.length - 1;
