@@ -29,6 +29,7 @@ Features:
 * **Count** using `size` or the no-arg `getCount` — O(1), from a stored count; `getCount({ path, ascending })` walks for a partial count from a cursor
 * **Clear** using `clear` to empty the tree in place (invalidates outstanding paths; reusable afterward)
 * **Copy-on-Write Inheritance**: Create new tree versions from a base tree efficiently. Changes in the derived tree do not affect the base.
+* **Flatten** using `flatten()` — an O(n) genuine-isolation copy that shares no node with a (former) base, for when `clearBase()`'s cheap pointer-drop isn't isolated enough (see the *Base immutability contract* below)
 
 WARNING: by default this library freezes added entries to reduce the chance that keys are externally mutated, but this is not done transitively, so it is possible that an object's key can be mutated after adding, resulting in tree corruption.  Don't attempt to change a key value after it has been inserted.  Use updateAt, upsert, insdate, or deleteAt/insert to change the key value.
 
@@ -117,7 +118,15 @@ A derived tree reads any un-modified node **directly from its base** — copy-on
 
 > **Treat a base as immutable for the lifetime of its derived children.** Derive your children first, then do not insert/update/delete on the base while any derived child is still in use. Mutating the base can corrupt every child's view of the nodes it still shares with that base. If you need to keep mutating the original, mutate a *derived child* instead and leave the base frozen.
 
-`clearBase()` detaches a child from its base cheaply — it drops the base pointer, it does **not** deep-copy. A flattened child can therefore still *share* untouched nodes with its former base (an unwritten child shares the entire tree), and once detached neither tree copies-on-write any longer. So the same rule outlives `clearBase()`: after calling it, treat the former base as frozen (in practice, discard it). If you genuinely need two independently-mutable trees from the same data, build a fresh tree and re-insert rather than relying on `clearBase` to isolate shared structure.
+`clearBase()` detaches a child from its base cheaply — it drops the base pointer, it does **not** deep-copy. A flattened child can therefore still *share* untouched nodes with its former base (an unwritten child shares the entire tree), and once detached neither tree copies-on-write any longer. So the same rule outlives `clearBase()`: after calling it, treat the former base as frozen (in practice, discard it).
+
+If you genuinely need a tree that is independent of its former base — sharing no node with it, by identity — call **`flatten()`** instead: it rebuilds the tree's current entries into a fresh, standalone tree in one O(n) pass (versus building a new tree and re-inserting every entry one by one, which costs O(n log n)). The result carries over this tree's `freeze` and `checkComparator` options and behaves identically to the original, just fully isolated:
+
+```ts
+  const isolated = derivedTree.flatten(); // Genuinely independent copy - shares no node with derivedTree's base
+```
+
+Use `clearBase()` when you just want to stop depending on the base object and don't mind lingering shared structure; use `flatten()` when true isolation matters.
 
 This contract is currently documented, not enforced at runtime (see *Help wanted* below).
 

@@ -148,6 +148,22 @@ export class BTree<TKey, TEntry> {
 		this.base = undefined;
 	}
 
+	/**
+	 * Produces a genuinely independent copy of this tree in one O(n) pass - the safe alternative to
+	 * {@link clearBase} when true isolation from a former base is required. Where `clearBase` merely drops
+	 * the base pointer (so untouched nodes can still be shared by identity with the former base - see its
+	 * docs), `flatten` walks this tree's entries once and rebuilds them into a fresh, standalone tree via
+	 * {@link BTree.buildFrom}, sharing no node with this tree or its base. The `freeze` and `checkComparator`
+	 * options are carried over so the result behaves identically to this tree. Works the same whether or
+	 * not this tree has a base, and on an empty tree (returns a valid, independent empty tree).
+	 */
+	flatten(): BTree<TKey, TEntry> {
+		return BTree.buildFrom(this.entries(), this.keyFromEntry, this.compare, {
+			freeze: this._freeze,
+			checkComparator: this._checkComparator,
+		});
+	}
+
 	/** Freezes an entry to deter key mutation, unless freezing was disabled at construction. */
 	private freezeEntry(entry: TEntry): TEntry {
 		if (this._freeze) Object.freeze(entry);
