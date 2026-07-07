@@ -129,6 +129,15 @@ describe('Iteration ergonomics: clear()', () => {
 		expect(tree.getCount()).to.equal(2);
 	});
 
+	it('clear() mid-iteration invalidates a live entries() walk on its next step', () => {
+		const tree = buildSet(200);
+		const walk = tree.entries();
+		expect(walk.next().value, 'first entry read before clear').to.equal(0);
+		tree.clear();	// bumps the version like any mutation
+		// entries() reads tree.at(path) inside the loop, so the very next step validates and throws.
+		expect(() => walk.next(), 'next step after clear throws').to.throw(InvalidPathError);
+	});
+
 	it('clear() on an empty tree is a no-op count-wise but still invalidates prior paths', () => {
 		const tree = new BTree<number, number>();
 		const before = tree.first();		// off path, version 0
