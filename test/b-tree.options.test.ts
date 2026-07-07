@@ -123,7 +123,7 @@ describe('BTreeOptions', () => {
 			assertTreeInvariants(magnitude);
 
 			// A comparator with large opposite magnitudes, plus repeated equal-key probes (rejected duplicates
-			// re-run the comparison and hit result === 0, which skips the check entirely).
+			// re-run the comparison and hit result === 0, which the sign-based check accepts: sign(0) === -sign(0)).
 			const wide = new BTree<number, number>(undefined, (a, b) => a < b ? -5 : a > b ? 5 : 0);
 			for (const k of seq(0, 200)) wide.insert(k);
 			for (const k of seq(0, 200)) expect(wide.insert(k).on, 'duplicate rejected, no throw').to.be.false;
@@ -158,7 +158,7 @@ describe('BTreeOptions', () => {
 	describe('comparator invocation count (perf goal)', () => {
 		// Build two structurally identical ~1000-entry trees whose comparators count invocations. Past the
 		// default sample window, a find on the default tree issues ~one compare per logical comparison, while
-		// the same find under checkComparator issues ~2x (the antisymmetry re-compare on every non-equal step).
+		// the same find under checkComparator issues ~2x (the antisymmetry re-compare on every step).
 		const N = 1000;
 		const target = 500;	// present in both trees
 

@@ -188,7 +188,7 @@ The `BTree` constructor takes an optional third `options` argument for callers t
 * **`freeze`** (default `true`) — when true, every inserted/updated entry is passed through `Object.freeze` to deter accidental key mutation.  Set it to `false` for trusted bulk loads of entries you will never mutate; the freeze cost disappears, but so does the protection (see the immutability WARNING above).
 * **`checkComparator`** (default `false`) — governs how thoroughly the comparator is verified to be antisymmetric (that `compare(a, b)` and `compare(b, a)` disagree in sign).  A broken comparator silently corrupts the tree, so this check exists to surface the bug.
   * **Default (`false`)** — only the first 32 real comparisons are checked, then the check drops off the hot path entirely.  This catches an obviously-broken comparator on the first few operations at zero steady-state cost.  **Trade-off:** a comparator that is subtly inconsistent *only* for some values encountered deep in a large tree may no longer be caught, because those comparisons fall outside the sample window.
-  * **`true`** — restores the historical behavior: *every* non-equal comparison is checked, at every level, for the life of the tree.  Use this when you want the exhaustive check and can afford roughly double the comparator calls on the hot path.
+  * **`true`** — restores the historical behavior: *every* comparison is checked, at every level, for the life of the tree.  Use this when you want the exhaustive check and can afford roughly double the comparator calls on the hot path.
 
 ### Contributing
 
