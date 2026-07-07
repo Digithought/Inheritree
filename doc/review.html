@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inheritree Code Review — COW Inheritance Focus</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1f27; --muted: #5b6572; --border: #d9dee5;
+    --card: #f6f8fa; --code-bg: #f0f2f5; --accent: #0b5fa5;
+    --crit: #b3261e; --high: #c2410c; --med: #a16207; --low: #3f6212; --info: #475569;
+    --good: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181d; --fg: #dfe4ea; --muted: #94a0ad; --border: #313a44;
+      --card: #1b2129; --code-bg: #20272f; --accent: #5aa7e0;
+      --crit: #f2726a; --high: #f59e6b; --med: #e0c060; --low: #9dc76a; --info: #9fb0c0;
+      --good: #6cc48f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; max-width: 60rem; padding: 2rem 1.25rem 5rem;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: 1.7rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.25rem; margin: 2.5rem 0 .75rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.05rem; margin: 1.75rem 0 .5rem; }
+  p, li { color: var(--fg); }
+  .subtitle { color: var(--muted); margin: 0 0 1.5rem; }
+  code, pre {
+    font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    font-size: .875em; background: var(--code-bg); border-radius: 4px;
+  }
+  code { padding: .1em .35em; }
+  pre { padding: .8rem 1rem; overflow-x: auto; line-height: 1.5; }
+  pre code { padding: 0; background: none; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  .finding {
+    border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px;
+    background: var(--card); padding: 1rem 1.25rem; margin: 1.25rem 0;
+  }
+  .finding h3 { margin-top: 0; }
+  .sev { display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; border-radius: 999px; padding: .1rem .6rem; color: var(--bg); }
+  .sev-high  { background: var(--high); }  .b-high  { border-left-color: var(--high); }
+  .sev-med   { background: var(--med); }   .b-med   { border-left-color: var(--med); }
+  .sev-low   { background: var(--low); }   .b-low   { border-left-color: var(--low); }
+  .sev-info  { background: var(--info); }  .b-info  { border-left-color: var(--info); }
+  .sev-good  { background: var(--good); }  .b-good  { border-left-color: var(--good); }
+  .loc { color: var(--muted); font-size: .85rem; }
+  .good-list li { margin-bottom: .35rem; }
+  .verified { color: var(--good); font-weight: 600; }
+  .resolved { color: var(--good); font-weight: 600; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+
+<h1>Inheritree Code Review</h1>
+<p class="subtitle">Focus: copy-on-write inheritance layer (the delta over the Digitree base) — correctness, performance, robustness, and design. Originally reviewed 2026-07-06 at <code>0fcf2ba</code>; <strong>revised 2026-07-07 after merging upstream Digitree v1.5.0</strong> (merge commit <code>f4b41a7</code>, package v0.5.0). Baseline: all 285 tests passing.</p>
+
+<h2>Verdict</h2>
+<p>The COW machinery is structurally sound. The ownership model (per-node <code>tree</code> back-pointer, clone-rootward on first write, upward-closed ownership) is coherent, the path-remapping through <code>mutableLeaf</code>/<code>mutableBranch</code>/<code>replaceRootward</code> is careful, and the test suite — particularly <code>assertOwnershipInvariant</code> with base snapshots — encodes the right invariants and exercises the hard rebalance paths. No structural COW-correctness bug was found in this review, and the invariants survived the v1.5.0 merge intact.</p>
+<p>The upstream v1.5.0 merge resolved four of the original fourteen findings outright (freeze-on-success, deleteAt path re-stamp, aliasing-free iteration, O(1) count) and substantially improved a fifth (comparator-check cost). The most significant remaining issue is unchanged and now stands alone at the top: node cloning uses <code>structuredClone</code>, which deep-copies user entries — throwing on entries containing functions, silently stripping class prototypes, breaking entry identity, and producing <em>unfrozen</em> copies. All of that is unique to derived trees and all avoidable. Second tier, also unchanged: the COW plumbing's allocation overhead on plain trees (now measurable with the upstream benchmark suite), and the base-immutability contract still being documented rather than enforced.</p>
+
+<h2>Findings Summary</h2>
+<table>
+  <tr><th>#</th><th>Severity</th><th>Status</th><th>Area</th><th>Finding</th></tr>
+  <tr><td>F1</td><td><span class="sev sev-high">High</span></td><td>Open</td><td>Correctness</td><td><code>structuredClone</code> in node clones: DataCloneError, prototype loss, identity break, unfrozen copies</td></tr>
+  <tr><td>F2</td><td><span class="sev sev-med">Medium</span></td><td>Open</td><td>Robustness</td><td>Base-immutability contract unenforced; concrete O(1) version-stamp guard proposed (now also protects <code>_count</code>)</td></tr>
+  <tr><td>F3</td><td><span class="sev sev-med">Medium</span></td><td>Open</td><td>Performance</td><td>COW plumbing allocates on every rebalance even for trees with no base (regression vs. Digitree; now quantifiable via <code>bench/</code>)</td></tr>
+  <tr><td>F4</td><td><span class="sev sev-med">Medium</span></td><td>Open</td><td>Performance</td><td><code>mutableBranch</code> allocates a Map and runs remap even when the spine is already owned</td></tr>
+  <tr><td>F5</td><td><span class="sev sev-low">Low</span></td><td>Open</td><td>API consistency</td><td><code>upsert</code> returns <code>on=false</code> for fresh inserts; <code>merge</code> returns <code>on=true</code> (upstream kept this in v1.5.0)</td></tr>
+  <tr><td>F6</td><td><span class="sev sev-good">Resolved</span></td><td>Upstream 1.5.0</td><td>API</td><td><code>insert</code> now freezes only after a successful insert; rejected duplicates leave the caller's object untouched</td></tr>
+  <tr><td>F7</td><td><span class="sev sev-good">Resolved</span></td><td>Upstream 1.5.0</td><td>Enhancement</td><td><code>deleteAt</code> re-stamps the path version — delete-while-iterating now supported</td></tr>
+  <tr><td>F8</td><td><span class="sev sev-low">Low</span></td><td>Partial</td><td>Robustness</td><td>Comparator-check <em>cost</em> solved (sampled check + <code>checkComparator</code> option); the check itself still misses sign-asymmetric comparators</td></tr>
+  <tr><td>F9</td><td><span class="sev sev-good">Resolved</span></td><td>Upstream 1.5.0</td><td>Docs / API</td><td><code>entries()</code>/<code>keys()</code>/<code>[Symbol.iterator]</code> added; cursor-aliasing prominently documented on <code>ascending</code>/<code>descending</code></td></tr>
+  <tr><td>F10</td><td><span class="sev sev-info">Info</span></td><td>Open</td><td>Design</td><td><code>node.tree</code> back-pointer retains entire base-chain of tree objects; an ownership token would decouple</td></tr>
+  <tr><td>F11</td><td><span class="sev sev-info">Info</span></td><td>Open</td><td>Design</td><td><code>root</code> getter walks the base chain on every access; cacheable under the immutability contract</td></tr>
+  <tr><td>F12</td><td><span class="sev sev-good">Resolved</span></td><td>Upstream + merge</td><td>Enhancement</td><td>O(1) <code>getCount()</code>/<code>size</code> via stored <code>_count</code>; the merge seeds a COW child's count from its base</td></tr>
+  <tr><td>F13</td><td><span class="sev sev-info">Info</span></td><td>Open</td><td>API</td><td>Offer <code>flatten()</code> (deep copy) alongside <code>clearBase()</code> to give users a safe isolation option</td></tr>
+  <tr><td>F14</td><td><span class="sev sev-info">Info</span></td><td>Partial</td><td>Docs / Hygiene</td><td>JSDoc param order fixed in the merge; path insulation and benchmark suite landed upstream; <code>Icon</code> junk files and <code>KeyRange</code>-as-classes remain</td></tr>
+  <tr><td>N1</td><td><span class="sev sev-info">Info</span></td><td>New (merge)</td><td>API design</td><td>Constructor's third argument is now a <code>BTree | BTreeOptions</code> union — workable, worth a deliberate long-term decision</td></tr>
+  <tr><td>N2</td><td><span class="sev sev-low">Low</span></td><td>New (merge)</td><td>Test coverage</td><td>COW × new-upstream-feature combinations (bulk-load base, <code>clear()</code> on a child, counts on children, <code>freeze:false</code> children) lack dedicated tests</td></tr>
+</table>
+
+<h2>Resolved by the v1.5.0 Merge</h2>
+
+<div class="finding b-good">
+  <h3><span class="sev sev-good">Resolved</span> F6, F7, F9, F12 — closed upstream; F12 extended for COW in the merge</h3>
+  <ul>
+    <li><strong>F6 — freeze on success only.</strong> <code>insert</code> now calls <code>freezeEntry</code> only after the entry is actually in the tree (src/b-tree.ts, <code>insert</code>); a rejected duplicate no longer freezes the caller's object. Upstream went further than the finding asked: freezing is also now optional per tree (<code>{ freeze: false }</code>).</li>
+    <li><strong>F7 — deleteAt re-stamps the path.</strong> <code>deleteAt</code> now stamps the bumped version onto the given path, whose position internalDelete keeps coherent — the delete-while-iterating pattern the original finding described is now the documented, tested behavior. This works identically through the COW layer, since <code>mutableLeaf</code> remaps the same path object it re-stamps.</li>
+    <li><strong>F9 — aliasing-free iteration.</strong> <code>entries()</code>, <code>keys()</code>, and <code>[Symbol.iterator]</code> yield distinct values (so <code>[...tree]</code> works), and <code>ascending</code>/<code>descending</code> now carry explicit warnings about the reused-cursor behavior. Exactly the remedy option the finding preferred.</li>
+    <li><strong>F12 — O(1) count.</strong> Upstream added the stored <code>_count</code> (the "incremental" design from the finding). The merge extends it to inheritance: a derived tree seeds <code>_count</code> from its base's stored count at construction (O(1)) and tracks its own ±1 delta — so <code>size</code>/<code>getCount()</code> are O(1) on children too, which matters for the versioning workloads Inheritree targets. Note the new coupling this creates with the immutability contract (see F2).</li>
+  </ul>
+</div>
+
+<h2>Open Findings</h2>
+
+<div class="finding b-high">
+  <h3><span class="sev sev-high">High</span> F1 — <code>structuredClone</code> deep-copies user data during COW cloning <span class="loc">(unchanged by merge)</span></h3>
+  <p class="loc">src/nodes.ts (<code>LeafNode.clone</code>, <code>BranchNode.clone</code>)</p>
+  <pre><code>clone(newTree: BTree&lt;any, any&gt;): LeafNode&lt;TEntry&gt; {
+    return new LeafNode(structuredClone(this.entries), newTree);
+}</code></pre>
+  <p>When a derived tree first writes to a shared leaf, every entry in that leaf is deep-cloned. Four distinct problems, <span class="verified">all empirically verified in Node</span>:</p>
+  <ol>
+    <li><strong>Throws on legal entries.</strong> Any entry containing a function, symbol, or other non-cloneable value raises <code>DataCloneError</code> — but only when a <em>derived</em> tree happens to COW-clone the leaf holding it. The same entry works fine in a plain tree, so this surfaces as a data-dependent, late failure.</li>
+    <li><strong>Silently strips prototypes.</strong> A class-instance entry becomes a plain object in the derived tree: methods and getters vanish. No error, just wrong data.</li>
+    <li><strong>Breaks entry identity.</strong> <code>derived.get(k) !== base.get(k)</code> after a COW clone of that leaf, but <code>===</code> for entries in untouched leaves. Identity-based user logic behaves inconsistently depending on internal node boundaries the user can't see.</li>
+    <li><strong>Un-freezes entries.</strong> <code>structuredClone</code> of a frozen object returns an <em>unfrozen</em> copy, undoing the protection <code>freezeEntry</code> applied on insert.</li>
+  </ol>
+  <p>It is also internally inconsistent — the rebalance merge paths move base-owned entries into child-owned leaves <em>by reference</em>, so cross-tree sharing of entries is already the design's own assumption — and it's the slow option: a deep clone of up to 64 entries where a shallow copy suffices.</p>
+  <p><strong>Fix:</strong> shallow-copy — <code>this.entries.slice()</code> / <code>this.partitions.slice()</code>. Entries are treated as immutable by the tree's own contract (frozen by default; with the new <code>freeze: false</code> option the README still forbids post-insert mutation), so sharing them by reference across base and child is exactly as safe as the sharing the tree already does everywhere else. <strong>The merge sharpens this finding:</strong> with upstream's new <code>{ freeze: false }</code> option, entries are never frozen at all, yet <code>structuredClone</code> still pays full deep-copy cost on them — the one configuration that asked for maximum speed gets the slowest clone. Add tests alongside the fix: class-instance entries, function-bearing entries, entry identity across base/derived, frozen-ness of entries in cloned leaves.</p>
+</div>
+
+<div class="finding b-med">
+  <h3><span class="sev sev-med">Medium</span> F2 — Base-immutability contract has no runtime guard <span class="loc">(unchanged by merge; slightly more valuable now)</span></h3>
+  <p class="loc">readme.md "Help wanted"; src/b-tree.ts constructor docs, <code>root</code> getter</p>
+  <p>Already acknowledged in the readme. The pieces remain in place after the merge: every tree maintains <code>_version</code>, and every public operation funnels through <code>validatePath</code> or the <code>root</code> getter. That makes the guard nearly free:</p>
+  <pre><code>constructor(..., base?) {
+    ...
+    this.baseVersion = base?.chainVersion() ?? 0;
+}
+
+/** Version of this tree plus everything it inherits from (O(chain), chains are short). */
+private chainVersion(): number {
+    return this._version + (this.base ? this.base.chainVersion() : 0);
+}
+
+private checkBase() {
+    if (this.base && this.base.chainVersion() !== this.baseVersion) {
+        throw new MutatedBaseError();  // base (or an ancestor base) mutated after derivation
+    }
+}</code></pre>
+  <p>Call <code>checkBase()</code> in the <code>root</code> getter and in <code>isValid</code>. That covers every entry point: fresh operations resolve through <code>root</code>, and navigation on existing paths goes through <code>validatePath</code> → <code>isValid</code>. The recursive sum handles multi-level chains. Cost is two integer ops per public call for the common single-level case.</p>
+  <p><strong>The merge raises the stakes slightly:</strong> a child's <code>_count</code> is now seeded from the base at derivation, so a contract violation no longer just risks structural corruption — it also silently skews the child's O(1) count even when the shared nodes happen to survive. One more cheap, observable symptom the guard would convert into a loud error. Two honest limitations to document remain as before: detection happens at the child's <em>next</em> operation, and the post-<code>clearBase()</code> obligation stays unguardable (see F13).</p>
+</div>
+
+<div class="finding b-med">
+  <h3><span class="sev sev-med">Medium</span> F3 — COW plumbing taxes plain (non-derived) trees <span class="loc">(unchanged by merge; now measurable)</span></h3>
+  <p class="loc">src/b-tree.ts — <code>leafSibPath</code>/<code>branchSibSegments</code> call sites in <code>rebalanceLeaf</code>/<code>rebalanceBranch</code>; <code>path.branches.slice(...)</code> at every <code>mutableBranch</code> call site</p>
+  <p>Overhead present on every borrow/merge/split even when <code>this.base === undefined</code>:</p>
+  <ul>
+    <li><code>leafSibPath</code> clones the entire branch array plus a fresh <code>PathImpl</code>, only for <code>mutableLeaf</code> to take the no-base fast path and discard it all.</li>
+    <li><code>branchSibSegments</code> likewise allocates a cloned segment list per branch borrow/merge.</li>
+    <li>Every <code>mutableBranch</code> call site pre-allocates <code>path.branches.slice(0, depth + 1)</code> before the callee can early-return on <code>!this.base</code>.</li>
+  </ul>
+  <p><strong>Fix shape:</strong> make laziness the callee's job. Pass <code>(path, depth)</code> (and for siblings, <code>(path, depth, sib, delta)</code>) and let <code>mutableLeaf</code>/<code>mutableBranch</code> construct slices/sibling segments only after deciding a clone is actually needed. This also removes the fabricated <code>leafIndex</code> in <code>leafSibPath</code> (meaningless in the sibling leaf; unused only by luck of the implementation).</p>
+  <p><strong>New since the merge:</strong> upstream's v1.5.0 mutation internals are leaner than ever (direct node access, no wrappers), so the fork's per-op delta <em>grew</em> — and upstream also shipped a <code>bench/</code> harness (tinybench). Before fixing, run the bench on this fork vs. upstream Digitree to get the real number for the delete-heavy workload; after fixing, the same run verifies the win. The fix priority rises accordingly: it is now the difference between "Inheritree costs you nothing until you derive" being true or merely aspirational.</p>
+</div>
+
+<div class="finding b-med">
+  <h3><span class="sev sev-med">Medium</span> F4 — <code>mutableBranch</code> does wasted work when the spine is already owned <span class="loc">(unchanged by merge)</span></h3>
+  <p class="loc">src/b-tree.ts — <code>mutableBranch</code></p>
+  <p>For a derived tree that has already cloned its write path (the steady state for any write-heavy child), every subsequent <code>mutableBranch</code> call still allocates a <code>Map</code>, calls <code>replaceRootward</code> (which returns immediately at the first owned segment), then runs <code>mainPath.remap</code> — an O(depth) loop of <code>map.get</code> calls against an empty map. <code>mutableLeaf</code> already has the ownership fast path; <code>mutableBranch</code> is missing its twin:</p>
+  <pre><code>const branch = segments.at(-1)!.node;
+if (!this.base || branch.tree === this) {
+    return branch;   // owned ⇒ all ancestors owned (upward-closed ownership invariant)
+}</code></pre>
+  <p>The justification is the invariant the test suite itself formalizes (<code>assertOwnershipInvariant</code> check 1). Combined with F3, the entire mutable-node layer becomes allocation-free except when a clone genuinely occurs. Fix both in one refactor.</p>
+</div>
+
+<div class="finding b-low">
+  <h3><span class="sev sev-low">Low</span> F5 — <code>upsert</code> and <code>merge</code> disagree about <code>on</code> after an insert <span class="loc">(upstream kept this behavior in v1.5.0)</span></h3>
+  <p class="loc">src/b-tree.ts — <code>upsert</code>, <code>merge</code></p>
+  <p><code>merge</code> sets <code>path.on = true</code> after inserting; <code>upsert</code> leaves <code>on = false</code>, so <code>tree.at(tree.upsert(x))</code> returns <code>undefined</code> exactly when the entry was <em>freshly added</em>. Documented, but overloading a positional flag as a semantic result remains a footgun, and the two hybrid-mutation siblings resolving it opposite ways makes it worse. Upstream's v1.5.0 operation-result-contract pass tightened <code>updateAt</code> (it now throws <code>PathNotOnEntryError</code> on a crack path) but left the <code>upsert</code> asymmetry in place — so this is now a deliberate upstream position, and the fork should either adopt it as final or fix it upstream-first to avoid drift. Suggested shape stays: align with <code>merge</code> — always <code>on = true</code>, return <code>[path, wasUpdate]</code>.</p>
+</div>
+
+<div class="finding b-low">
+  <h3><span class="sev sev-low">Low</span> F8 — Comparator antisymmetry check is still incomplete <span class="loc">(cost half resolved upstream)</span></h3>
+  <p class="loc">src/b-tree.ts — <code>compareKeys</code>, <code>BTreeOptions.checkComparator</code></p>
+  <p>The original finding had two halves. The <em>cost</em> half is resolved: v1.5.0 samples the first 32 comparisons by default and drops the check off the hot path entirely, with <code>{ checkComparator: true }</code> restoring the exhaustive mode — a better design than the subclass escape hatch. The <em>completeness</em> half remains: the check still only fires when both directions return the <em>identical</em> nonzero value, missing zero-asymmetry (<code>compare(a,b)=1, compare(b,a)=0</code>) and same-sign results of different magnitude (<code>1</code> vs <code>2</code>, common with broken subtraction comparators). A sign-based check catches the whole class at the same cost: throw when <code>Math.sign(this.compare(b, a)) !== -Math.sign(result)</code>. Now that the check runs on a bounded sample (or by explicit opt-in), there is no performance argument left against strengthening it.</p>
+</div>
+
+<div class="finding b-info">
+  <h3><span class="sev sev-info">Info</span> F10 — <code>node.tree</code> back-pointer retains the whole tree-object chain <span class="loc">(unchanged by merge)</span></h3>
+  <p class="loc">src/nodes.ts</p>
+  <p>Ownership is checked purely by identity (<code>node.tree === this</code>), but the pointer retains the full <code>BTree</code> object — comparator and key-extractor closures, and transitively the entire <code>base</code> chain of tree objects, which survives <code>clearBase()</code> for as long as any shared node lives. A dedicated ownership token (<code>readonly owner = Symbol()</code> per tree) gives the same O(1) check while decoupling nodes from tree instances, and removes the <code>BTree&lt;any, any&gt;</code> type erasure from <code>nodes.ts</code>. Small new wrinkle from the merge: <code>clear()</code> now creates an owner-stamped root and drops the base, so a cleared child frees its chain — the token design would make that reasoning unnecessary rather than merely correct.</p>
+</div>
+
+<div class="finding b-info">
+  <h3><span class="sev sev-info">Info</span> F11 — <code>root</code> getter walks the base chain on every access <span class="loc">(unchanged by merge)</span></h3>
+  <p class="loc">src/b-tree.ts — <code>root</code></p>
+  <p>Every <code>find</code>/<code>first</code>/<code>last</code> on a derived tree resolves <code>this.base.root</code> recursively — O(chain length) per operation, and chains grow linearly with history in the snapshot-per-version pattern. Under the immutability contract the base's effective root cannot legitimately change after derivation, so caching is sound (<code>this._baseRoot ??= this.base.root</code>). If F2's version guard lands, cache-then-check keeps detection intact.</p>
+</div>
+
+<div class="finding b-info">
+  <h3><span class="sev sev-info">Info</span> F13 — Pair <code>clearBase()</code> with a true-isolation <code>flatten()</code> <span class="loc">(unchanged by merge)</span></h3>
+  <p class="loc">src/b-tree.ts — <code>clearBase</code>; readme "Base immutability contract"</p>
+  <p>The <code>clearBase</code> docs are excellent and honest about the sharing hazard — but "build a fresh tree and re-insert" outsources an O(n log n) workaround for what the library could do in O(n): walk once, cloning every node not owned by <code>this</code>. <strong>The merge hands this finding its implementation for free:</strong> upstream's <code>buildFrom</code> is exactly the O(n) bottom-up bulk loader a <code>flatten()</code> needs — <code>BTree.buildFrom(this.entries(), this.keyFromEntry, this.compare)</code> is nearly the whole method (plus carrying over the freeze/checkComparator options). It would also close the F2 guard's post-<code>clearBase</code> blind spot for users who choose it.</p>
+</div>
+
+<div class="finding b-info">
+  <h3><span class="sev sev-info">Info</span> F14 — Documentation and hygiene items <span class="loc">(mostly resolved)</span></h3>
+  <ul>
+    <li><span class="resolved">Resolved:</span> constructor JSDoc param order — fixed during the merge (docs now list <code>keyFromEntry</code> first, matching the signature, and document the new base/options discrimination).</li>
+    <li><span class="resolved">Resolved upstream:</span> path-internals insulation (readme help-wanted) — <code>Path</code> is now a public interface with <code>PathImpl</code> module-internal; and the benchmark-suite help-wanted item — <code>bench/</code> landed with tinybench.</li>
+    <li><strong>Remaining:</strong> <code>KeyRange</code>/<code>KeyBound</code> as classes (structural interfaces would let callers pass literals); macOS <code>Icon</code> junk files still committed under <code>doc/</code> and <code>test/</code> (add <code>Icon?</code> to <code>.gitignore</code> and remove); the readme still lists "Benchmark suite" under Help wanted even though <code>bench/</code> now exists — stale line to drop.</li>
+  </ul>
+</div>
+
+<h2>New Findings from the Merge</h2>
+
+<div class="finding b-info">
+  <h3><span class="sev sev-info">Info</span> N1 — Constructor's third argument is now a <code>BTree | BTreeOptions</code> union</h3>
+  <p class="loc">src/b-tree.ts — constructor</p>
+  <p>Upstream put <code>BTreeOptions</code> in the third position; Inheritree's documented API has the base tree there. The merge resolves the collision by discriminating with <code>instanceof BTree</code> and accepting options as a fourth argument when a base is present. This preserves both parties' call sites and is unambiguous (a base can never be a plain options object), but positional unions age poorly — every future upstream constructor change lands on this same seam. Worth a deliberate decision for the fork's next major: either (a) keep the union as the permanent contract and document it prominently, or (b) migrate to <code>options.base</code> (<code>BTreeOptions&lt;TKey, TEntry&gt;</code> gains an optional <code>base</code>) with the positional form deprecated. Option (b) makes the fork's constructor signature identical to upstream's, shrinking the permanent merge surface to the options interface — cheap insurance given how painful this file's merges are.</p>
+</div>
+
+<div class="finding b-low">
+  <h3><span class="sev sev-low">Low</span> N2 — COW × new-upstream-feature combinations lack dedicated tests</h3>
+  <p class="loc">test/ — coverage gap, not a defect</p>
+  <p>The merged suite (285 passing) covers upstream's new features on plain trees and the fork's COW behavior on the pre-1.5 feature set, but the cross products are only implicitly covered, and several encode fresh merge decisions that deserve pinning:</p>
+  <ul>
+    <li><strong><code>buildFrom</code> as a base:</strong> derive a child from a bulk-loaded tree, mutate, verify ownership invariants and base immutability (bulk-loaded nodes are owner-stamped by the merge — a regression here would silently disable COW cloning).</li>
+    <li><strong><code>clear()</code> on a derived child:</strong> the merge decided <code>clear()</code> drops the base (an empty tree inherits nothing). Test that the base is untouched, the child is empty and re-insertable, and the child no longer shares nodes.</li>
+    <li><strong>Counts on children:</strong> <code>size</code>/<code>getCount()</code> after derive (equals base), after child inserts/deletes (base's count unchanged), and through a chain (base → c1 → c2).</li>
+    <li><strong><code>freeze: false</code> children and the options-passing form:</strong> <code>new BTree(k, c, base, { freeze: false })</code> — the four-argument path introduced by the merge has no direct test.</li>
+    <li><strong>Delete-while-iterating on a child:</strong> upstream's new deleteAt re-stamp exercised across a COW clone boundary (the remapped path is the one re-stamped).</li>
+    <li><strong>Oracle test with a COW fork:</strong> upstream's randomized oracle (<code>b-tree.oracle.test.ts</code>) runs against a Map oracle on one tree; a variant that forks a child mid-sequence and runs both oracles would be the strongest COW regression net available.</li>
+  </ul>
+</div>
+
+<h2>What's Working Well</h2>
+<ul class="good-list">
+  <li><strong>The ownership invariant is explicit and tested.</strong> <code>assertOwnershipInvariant</code> (connectivity, no-shared-mutable-node, snapshot-verified base immutability) is exactly the right formalization of the COW design — and it carried through the v1.5.0 merge with only type-level edits, which is what a well-factored invariant should do.</li>
+  <li><strong>The hard-won fixes are documented at the point of subtlety.</strong> The comments on <code>branchSibSegments</code>, <code>replaceRootward</code>'s owned-ancestor linking, and the rebalance merge partition logic explain <em>why</em> the code is shaped this way and what corruption the naive version caused.</li>
+  <li><strong>Honest user-facing docs.</strong> The base-immutability contract and the <code>clearBase</code> caveats state the sharp edges plainly.</li>
+  <li><strong>Upstream convergence is real.</strong> Four of this review's original findings (F6, F7, F9, F12) and two readme help-wanted items were independently resolved in Digitree v1.5.0 — the fork is tracking a base that is actively improving in the same directions, which lowers the long-term cost of staying a fork.</li>
+</ul>
+
+<h2>Suggested Order of Attack (revised)</h2>
+<ol>
+  <li><strong>F1</strong> — shallow-copy node clones. Small diff, fixes a correctness class, pure speedup, and now also the only remaining High. Add the F1 test list.</li>
+  <li><strong>N2</strong> — the COW × v1.5.0 test matrix, especially the oracle-with-fork variant. Cheap to write against the freshly-merged code while the merge decisions are still crisp, and it protects everything below.</li>
+  <li><strong>F2</strong> — version-stamp base guard. Closes the readme's top "help wanted" item; now also protects <code>_count</code> integrity.</li>
+  <li><strong>F3 + F4</strong> together — restructure <code>mutableLeaf</code>/<code>mutableBranch</code> to take <code>(path, depth[, sib, delta])</code> and build clone inputs lazily; add the owned-spine fast path. Benchmark before/after with the new <code>bench/</code> harness.</li>
+  <li><strong>F13</strong> — <code>flatten()</code> via <code>buildFrom</code>; a few lines now that the bulk loader exists.</li>
+  <li><strong>F5, F8, F14 remainders, N1</strong> as taste dictates; F5 and N1 are fork-positioning decisions (align-with-upstream vs. fix-and-diverge) more than code tasks.</li>
+</ol>
+
+<footer>
+  Review scope: src/ (b-tree.ts, nodes.ts, path.ts, key-range.ts, index.ts), readme.md, test/helpers/invariants.ts, with COW test files consulted for coverage. Emphasis on Inheritree-specific code (COW inheritance layer) per request. Originally reviewed 2026-07-06 at commit <code>0fcf2ba</code> (215 tests); revised 2026-07-07 after the upstream Digitree v1.5.0 merge, commit <code>f4b41a7</code> (285 tests, all passing; build and typedoc clean). structuredClone behaviors (freeze loss, prototype loss, DataCloneError) verified empirically in Node on this machine.
+</footer>
+
+</body>
+</html>
