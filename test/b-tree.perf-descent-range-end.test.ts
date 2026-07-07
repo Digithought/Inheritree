@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { BTree, KeyBound, KeyRange, NodeCapacity, Path } from '../src/index.js';
-import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { BranchNode, TreeNode, LeafNode } from '../src/nodes.js';
+import { asImpl } from './helpers/path-impl.js';
 
 // Coverage for the perf-descent-and-range-end ticket (review §3.3 + §3.4). These are *pure* optimizations:
 //   §3.3 - getPath/getFirst/getLast descend top-down with a push loop instead of bottom-up recursion + unshift,
@@ -22,7 +23,7 @@ function rangeValues<TKey, TEntry>(tree: BTree<TKey, TEntry>, range: KeyRange<TK
 // ---- Reference recursion: a literal transcription of the *old* getPath/getFirst/getLast (bottom-up unshift). ----
 // Used only to prove the new iterative descent produces identical (node, index) branch chains. Numeric identity
 // keys, so the binary searches below mirror the tree's indexOfKey / indexOfEntry exactly.
-interface RefPath { branches: { node: BranchNode<number>; index: number }[]; leaf: LeafNode<number>; index: number; on: boolean }
+interface RefPath { branches: { node: BranchNode<number, number>; index: number }[]; leaf: LeafNode<number>; index: number; on: boolean }
 
 function refIndexOfEntry(entries: number[], key: number): [boolean, number] {
 	let lo = 0, hi = entries.length - 1;
@@ -48,24 +49,24 @@ function refIndexOfKey(keys: number[], key: number): number {
 	return lo;
 }
 
-function refFind(node: ITreeNode, key: number): RefPath {
+function refFind(node: TreeNode<number, number>, key: number): RefPath {
 	if (node instanceof LeafNode) {
 		const [on, index] = refIndexOfEntry(node.entries, key);
 		return { branches: [], leaf: node, index, on };
 	}
-	const branch = node as BranchNode<number>;
+	const branch = node as BranchNode<number, number>;
 	const index = refIndexOfKey(branch.partitions, key);
 	const sub = refFind(branch.nodes[index], key);
 	sub.branches.unshift({ node: branch, index });	// old shape: prepend on the way back up
 	return sub;
 }
 
-function refEdge(node: ITreeNode, last: boolean): RefPath {
+function refEdge(node: TreeNode<number, number>, last: boolean): RefPath {
 	if (node instanceof LeafNode) {
 		const count = node.entries.length;
 		return { branches: [], leaf: node, index: last ? (count > 0 ? count - 1 : 0) : 0, on: count > 0 };
 	}
-	const branch = node as BranchNode<number>;
+	const branch = node as BranchNode<number, number>;
 	const index = last ? branch.nodes.length - 1 : 0;
 	const sub = refEdge(branch.nodes[index], last);
 	sub.branches.unshift({ node: branch, index });
@@ -73,28 +74,30 @@ function refEdge(node: ITreeNode, last: boolean): RefPath {
 }
 
 function assertSamePath(actual: Path<number, number>, ref: RefPath, label: string) {
-	expect(actual.branches.length, `${label}: branch depth`).to.equal(ref.branches.length);
+	const a = asImpl(actual);
+	expect(a.branches.length, `${label}: branch depth`).to.equal(ref.branches.length);
 	for (let i = 0; i < ref.branches.length; i++) {
-		expect(actual.branches[i].node, `${label}: branch[${i}].node identity`).to.equal(ref.branches[i].node);
-		expect(actual.branches[i].index, `${label}: branch[${i}].index`).to.equal(ref.branches[i].index);
+		expect(a.branches[i].node, `${label}: branch[${i}].node identity`).to.equal(ref.branches[i].node);
+		expect(a.branches[i].index, `${label}: branch[${i}].index`).to.equal(ref.branches[i].index);
 	}
-	expect(actual.leafNode, `${label}: leafNode identity`).to.equal(ref.leaf);
-	expect(actual.leafIndex, `${label}: leafIndex`).to.equal(ref.index);
-	expect(actual.on, `${label}: on`).to.equal(ref.on);
+	expect(a.leafNode, `${label}: leafNode identity`).to.equal(ref.leaf);
+	expect(a.leafIndex, `${label}: leafIndex`).to.equal(ref.index);
+	expect(a.on, `${label}: on`).to.equal(ref.on);
 }
 
 // Independent structural invariant (no reference needed): the branch chain must be a real root->leaf walk in
 // root-first order, i.e. each chosen child leads to the next node and the last leads to the leaf.
 function assertDescentChainConsistent(tree: BTree<number, number>, path: Path<number, number>, label: string) {
-	const root = (tree as any)['_root'] as ITreeNode;
-	if (path.branches.length > 0) {
-		expect(path.branches[0].node, `${label}: branch[0] is the root`).to.equal(root);
+	const p = asImpl(path);
+	const root = (tree as any)['_root'] as TreeNode<number, number>;
+	if (p.branches.length > 0) {
+		expect(p.branches[0].node, `${label}: branch[0] is the root`).to.equal(root);
 	} else {
 		expect(root instanceof LeafNode, `${label}: no branches -> root is a leaf`).to.be.true;
 	}
-	for (let i = 0; i < path.branches.length; i++) {
-		const b = path.branches[i];
-		const next: ITreeNode = i + 1 < path.branches.length ? path.branches[i + 1].node : path.leafNode;
+	for (let i = 0; i < p.branches.length; i++) {
+		const b = p.branches[i];
+		const next: TreeNode<number, number> = i + 1 < p.branches.length ? p.branches[i + 1].node : p.leafNode;
 		expect(b.node.nodes[b.index], `${label}: branch[${i}] child leads to next node`).to.equal(next);
 	}
 }
@@ -205,6 +208,10 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 		// The old loop called compareKeys (which calls compare twice) per yielded element. The new stop test is a
 		// pure position match, so a full unbounded scan should touch the comparator only for the O(1) start-past-end
 		// guard - a fixed count independent of how many elements are yielded.
+		// The exact count is 1: under the default (checkComparator off), compareKeys calls compare ONCE past the
+		// 32-comparison sample window, which the n-key build exhausts before reset(). (See the BTreeOptions ticket;
+		// with { checkComparator: true } the guard would cost 2, but that constant is beside the point here - what
+		// this proves is that the count does not grow with element count.)
 		const countingTree = (n: number): { tree: BTree<number, number>; comparisons: () => number; reset: () => void } => {
 			let compares = 0;
 			const tree = new BTree<number, number>(k => k, (a, b) => { compares++; return a < b ? -1 : a > b ? 1 : 0; });
@@ -212,23 +219,23 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			return { tree, comparisons: () => compares, reset: () => { compares = 0; } };
 		};
 
-		it('a full ascending scan uses a fixed 2 comparisons regardless of element count', () => {
+		it('a full ascending scan uses a fixed 1 comparison regardless of element count', () => {
 			for (const n of [50, 500]) {
 				const { tree, comparisons, reset } = countingTree(n);
 				reset();
 				const out = rangeValues(tree, new KeyRange());
 				expect(out.length, `scanned all ${n}`).to.equal(n);
 				// first()/last() descend by edge (no compare); the loop's stop test is a position match (no compare);
-				// only the single up-front compareKeys guard runs, and compareKeys calls compare twice (consistency).
-				expect(comparisons(), `n=${n}: comparator calls independent of element count`).to.equal(2);
+				// only the single up-front compareKeys guard runs, one compare each past the sample window.
+				expect(comparisons(), `n=${n}: comparator calls independent of element count`).to.equal(1);
 			}
 		});
 
-		it('a full descending scan is likewise a fixed 2 comparisons', () => {
+		it('a full descending scan is likewise a fixed 1 comparison', () => {
 			const { tree, comparisons, reset } = countingTree(300);
 			reset();
 			expect(rangeValues(tree, new KeyRange(undefined, undefined, false)).length).to.equal(300);
-			expect(comparisons()).to.equal(2);
+			expect(comparisons()).to.equal(1);
 		});
 
 		it('a bounded scan cost is search + the guard, not per-element (does not grow with span)', () => {
@@ -263,7 +270,7 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			const tree = buildSeq(10);
 			expect((tree as any)['_root'] instanceof LeafNode, 'single leaf').to.be.true;
 			for (const key of [-1, 0, 4.5, 9, 10]) {
-				const p = tree.find(key);
+				const p = asImpl(tree.find(key));
 				expect(p.branches.length, `find(${key}) has no branches`).to.equal(0);
 				assertSamePath(p, refFind((tree as any)['_root'], key), `find(${key})`);
 			}
@@ -273,7 +280,8 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 
 		it('empty tree: first/last/find are well-formed off paths with empty branches', () => {
 			const tree = new BTree<number, number>();
-			for (const p of [tree.first(), tree.last(), tree.find(5)]) {
+			for (const raw of [tree.first(), tree.last(), tree.find(5)]) {
+				const p = asImpl(raw);
 				expect(p.branches.length).to.equal(0);
 				expect(p.on).to.be.false;
 				expect(p.leafNode instanceof LeafNode).to.be.true;
@@ -301,7 +309,7 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			const tree = buildSeq(count);
 			const root = (tree as any)['_root'];
 			expect(root instanceof BranchNode && root.nodes[0] instanceof BranchNode, 'genuinely 3-level').to.be.true;
-			expect(tree.find(2048).branches.length, 'target sits deep').to.be.greaterThanOrEqual(2);
+			expect(asImpl(tree.find(2048)).branches.length, 'target sits deep').to.be.greaterThanOrEqual(2);
 			for (const key of [-1, 0, 1, 63, 64, 65, 2048, 2048.5, count - 1, count]) {
 				const p = tree.find(key);
 				assertSamePath(p, refFind(root, key), `find(${key})`);

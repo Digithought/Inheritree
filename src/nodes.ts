@@ -1,19 +1,22 @@
-import type { BTree } from "./b-tree.js"; // For BTree type
+import type { BTree } from "./b-tree.js"; // For BTree owner type (copy-on-write)
 
 // Note: used to store isLeaf flag in each node thinking that instanceof might be slower; V8 benchmark showed instanceof to be 5x faster
-export interface ITreeNode {
-	// Reference to the BTree instance that owns this node. Optional: every node created through
-	// real tree operations (insert/clone) carries an owner, which copy-on-write consults to decide
-	// whether a node must be cloned before mutation. Manually-constructed nodes in non-COW tests
-	// have no owner, and none is needed there (the owner is only read when a base tree exists).
-	tree?: BTree<any, any>;
-	clone(newTree: BTree<any, any>): ITreeNode;
-}
+export type TreeNode<TKey, TEntry> = LeafNode<TEntry> | BranchNode<TKey, TEntry>;
 
-export class LeafNode<TEntry> implements ITreeNode {
+/** Type-erased node — any leaf or branch regardless of key/entry types.  Also the compatibility
+ * alias for the pre-1.5 Inheritree exported name (before upstream introduced the `TreeNode` union). */
+export type ITreeNode = TreeNode<any, any>;
+
+// Owner reference (Inheritree-specific): every node created through real tree operations
+// (insert/clone/bulk load) carries a reference to the BTree that owns it, which copy-on-write
+// consults to decide whether a node must be cloned before mutation. Manually-constructed nodes
+// in non-COW tests have no owner, and none is needed there (the owner is only read when a base
+// tree exists).
+
+export class LeafNode<TEntry> {
 	constructor(
 		public entries: TEntry[],
-		public tree?: BTree<any, any> // Owner; populated for all nodes created by tree operations (see ITreeNode.tree)
+		public tree?: BTree<any, any> // Owner; populated for all nodes created by tree operations (see above)
 	) { }
 
 	clone(newTree: BTree<any, any>): LeafNode<TEntry> {
@@ -21,14 +24,14 @@ export class LeafNode<TEntry> implements ITreeNode {
 	}
 }
 
-export class BranchNode<TKey> implements ITreeNode {
+export class BranchNode<TKey, TEntry> {
 	constructor(
 		public partitions: TKey[],	// partition[0] refers to the lowest key in nodes[1]
-		public nodes: ITreeNode[],  // has one more entry than partitions, since partitions split nodes
-		public tree?: BTree<any, any> // Owner; populated for all nodes created by tree operations (see ITreeNode.tree)
+		public nodes: TreeNode<TKey, TEntry>[],  // has one more entry than partitions, since partitions split nodes
+		public tree?: BTree<any, any> // Owner; populated for all nodes created by tree operations (see above)
 	) { }
 
-	clone(newTree: BTree<any, any>): BranchNode<TKey> {
+	clone(newTree: BTree<any, any>): BranchNode<TKey, TEntry> {
 		return new BranchNode(structuredClone(this.partitions), [...this.nodes], newTree);
 	}
 }

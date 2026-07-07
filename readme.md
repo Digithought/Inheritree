@@ -15,18 +15,24 @@ Features:
 * **Existing attribute** can be used as a key (without additional storage)
 * **Custom sorting**
   * For performance, doesn't try to untangle idiosyncrasies of Ecmascript comparisons, but...
-  * Implementation does ensure consistency of sorting function
+  * Implementation does ensure consistency of sorting function (by default, a bounded sample of comparisons — see [Performance](#performance))
+* **Tunable safety costs** - optional constructor flags (`freeze`, `checkComparator`) let throughput-sensitive callers opt out of per-operation safety work; both default to the safe behavior
 * **Light weight** - very little memory used, only important primitives
 * **CRUD**: `insert`, `updateAt`, `deleteAt`, `find`, `first`, `last`
+* **Bulk load** using the static `BTree.buildFrom(sorted, ...)` — builds the whole tree from already-sorted, duplicate-free input in one O(n) pass, packing nodes near capacity (throws `UnsortedInputError` on unsorted/duplicate input)
 * **Upsert and Merge** for efficient hybrid mutation
-* **Enumerations** using `ascending` and `descending` from optional starting point
+* **Entry iteration** using `entries` and `keys`, or `for (const entry of tree)` / `[...tree]` — the safe default for reading (yields distinct values, no cursor aliasing)
+* **Enumerations** using `ascending` and `descending` (from an optional starting path; no argument walks the whole tree)
 * **Ranges** using `range`, ascending or descending, with optional inclusive/exclusive end-points
 * **Path** navigation through `next` and `prior` or `moveNext` and `movePrior`
 * **Find nearest**, using `next` on an unsuccessful path
-* **Count** using `getCount`, computed by summing leaf entries
+* **Count** using `size` or the no-arg `getCount` — O(1), from a stored count; `getCount({ path, ascending })` walks for a partial count from a cursor
+* **Clear** using `clear` to empty the tree in place (invalidates outstanding paths; reusable afterward)
 * **Copy-on-Write Inheritance**: Create new tree versions from a base tree efficiently. Changes in the derived tree do not affect the base.
 
-WARNING: this library freezes added entries to reduce the chance that keys are externally mutated, but this is not done transitively, so it is possible that an object's key can be mutated after adding, resulting in tree corruption.  Don't attempt to change a key value after it has been inserted.  Use updateAt, upsert, insdate, or deleteAt/insert to change the key value.
+WARNING: by default this library freezes added entries to reduce the chance that keys are externally mutated, but this is not done transitively, so it is possible that an object's key can be mutated after adding, resulting in tree corruption.  Don't attempt to change a key value after it has been inserted.  Use updateAt, upsert, insdate, or deleteAt/insert to change the key value.
+
+Freezing can be disabled with the `freeze: false` constructor option for trusted bulk loads of entries you will never mutate (see [Performance](#performance)) — but then the tree offers no protection at all, so only do this when you fully control the entries' lifetime.
 
 [^1]: technically this is a hybrid B-Tree/B+Tree.  Data are stored in the leaves, but no leaf-level linked list is implemented, since that's largely for optimizing for minimal contention.
 
@@ -52,9 +58,10 @@ Via pnpm/yarn:
   ...
   const tree = new BTree<number, number>();
   tree.insert(3); tree.insert(1); tree.insert(2);
-  for (let path of tree.ascending(tree.first())) {
-    console.log(tree.at(path));
+  for (const entry of tree) {       // the safe default: yields entries directly
+    console.log(entry);             // 1, 2, 3
   }
+  console.log([...tree.entries()]); // [1, 2, 3]
   const path = tree.find(1.5);  // result in "crack" between values
   console.log(path.on); // false (not on entry)
   console.log(tree.at(tree.next(path))); // 2
@@ -70,9 +77,10 @@ Via pnpm/yarn:
   tree.insert({ id: 3, shape: "square" });
   tree.insert({ id: 1, shape: "circle" });
   tree.insert({ id: 2, shape: "square" });
-  for (let path of tree.ascending(tree.first())) {
-    console.log(tree.at(path));
+  for (const widget of tree.entries()) {  // entries in ascending key order
+    console.log(widget);
   }
+  console.log([...tree.keys()]);  // [1, 2, 3]
   console.log(tree.get(2));  // Equivalent to find then at
 ```
 
@@ -118,7 +126,9 @@ This contract is currently documented, not enforced at runtime (see *Help wanted
 
 #### Paths
 
-Many methods take and return Path objects.  All paths not returned from a mutation operation itself are invalid after mutation and any attempt to use them will throw an exception.  None of the public methods will mutate a given path, except for `moveNext` and `movePrior`.
+Many methods take and return Path objects.  A `Path` is an insulated cursor: it exposes `on` (is it sitting on an entry?), `isEqual`, and `clone`, and nothing else — its internal position (leaf, index, branches, version) is deliberately hidden so it can't be corrupted by accident.  All paths not returned from a mutation operation itself are invalid after mutation and any attempt to use them will throw an exception.  `moveNext` and `movePrior` mutate the path they are given, and `deleteAt` mutates the path passed to it (leaving it valid - see below).
+
+The raw `ascending`/`descending` iterators yield **one live cursor, reused and mutated in place** at every step — they are a cursor-level tool, not a collection.  Spreading them (`[...tree.ascending()]`) or `.map`ping them gives you N references to the same path parked off the end, so reading them afterward is all-`undefined`; read `tree.at(path)` *inside* the loop, and `path.clone()` any cursor you need to keep.  When you just want the values, prefer `entries()` / `keys()` (or `for (const e of tree)`), which yield distinct entries/keys and sidestep the aliasing entirely.
 
 ```ts
   tree.updateAt(tree.last().prior(), 7);  // this is fine
@@ -127,6 +137,16 @@ Many methods take and return Path objects.  All paths not returned from a mutati
   const ninePath = tree.updateAt(tree.find(5), 9);
   tree.updateAt(ninePath, 8);  // Fine, ninePath came from mutation
   //tree.updateAt(path1, 7);  // DON'T USE path1 - invalid after mutation
+```
+
+`deleteAt` is a special case: the path you pass it stays valid after the delete, positioned at the "crack" the deleted entry left behind (its `on` becomes false).  A following `moveNext` recovers onto the deleted entry's successor and `movePrior` onto its predecessor - so you can delete while iterating without re-`find`ing:
+
+```ts
+  let p = tree.find(startKey);
+  while (p.on) {
+    if (shouldDelete(tree.at(p))) tree.deleteAt(p);  // p now sits at the successor's crack
+    tree.moveNext(p);  // after a delete: recovers onto the successor; otherwise: advances normally
+  }
 ```
 
 ### Background
@@ -145,6 +165,22 @@ The B+Tree variant further modifies the B-Tree structure by storing all data in 
 
 The best-case and worst-case time complexities for search, insertion, and deletion operations in a B+Tree are all O(log n), where n is the number of elements in the tree. This efficiency is maintained regardless of the tree's size, making B+Trees particularly well-suited for systems that manage large amounts of data.  For small datasets, this implementation has barely more overhead than an array, and should perform comparably to an ordered array.
 
+##### Optional safety costs
+
+The `BTree` constructor takes an optional third `options` argument for callers that want to trade a little safety for throughput.  Both options default to the safe behavior, so existing code is unaffected.
+
+```ts
+  const tree = new BTree<number, Widget>(e => e.id, undefined, {
+    freeze: false,          // default true
+    checkComparator: true,  // default false
+  });
+```
+
+* **`freeze`** (default `true`) — when true, every inserted/updated entry is passed through `Object.freeze` to deter accidental key mutation.  Set it to `false` for trusted bulk loads of entries you will never mutate; the freeze cost disappears, but so does the protection (see the immutability WARNING above).
+* **`checkComparator`** (default `false`) — governs how thoroughly the comparator is verified to be antisymmetric (that `compare(a, b)` and `compare(b, a)` disagree in sign).  A broken comparator silently corrupts the tree, so this check exists to surface the bug.
+  * **Default (`false`)** — only the first 32 real comparisons are checked, then the check drops off the hot path entirely.  This catches an obviously-broken comparator on the first few operations at zero steady-state cost.  **Trade-off:** a comparator that is subtly inconsistent *only* for some values encountered deep in a large tree may no longer be caught, because those comparisons fall outside the sample window.
+  * **`true`** — restores the historical behavior: *every* non-equal comparison is checked, at every level, for the life of the tree.  Use this when you want the exhaustive check and can afford roughly double the comparator calls on the hot path.
+
 ### Contributing
 
 Bug fixes, architectural enhancements, and speed improvement suggestions are welcome.  Added "helper" features might be better as an add-on library since the goal of this is to remain minimalistic.
@@ -154,7 +190,6 @@ Bug fixes, architectural enhancements, and speed improvement suggestions are wel
 TODO: need version checking against base tree; right now, the base is assumed to be immutable while it has live derived children (see the *Base immutability contract* above). A runtime guard — e.g. a version/`hasChildren` check that throws when a base is mutated while derived — would turn that documented contract into an enforced one.
 
 * Benchmark suite
-* Better insulation of path's internals
 * More tests
 * AssemblyScript portability?
 

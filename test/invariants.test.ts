@@ -12,7 +12,7 @@ function makeLeaf(start: number, n: number): LeafNode<number> {
 }
 
 /** A valid branch over `numLeaves` leaves, each holding `leafSize` sequential keys, first key `base`. */
-function makeBranchOfLeaves(numLeaves: number, leafSize: number, base: number): BranchNode<number> {
+function makeBranchOfLeaves(numLeaves: number, leafSize: number, base: number): BranchNode<number, number> {
 	const leaves: LeafNode<number>[] = [];
 	for (let i = 0; i < numLeaves; i++) {
 		leaves.push(makeLeaf(base + i * leafSize, leafSize));
@@ -21,11 +21,15 @@ function makeBranchOfLeaves(numLeaves: number, leafSize: number, base: number): 
 	for (let i = 1; i < numLeaves; i++) {
 		partitions.push(base + i * leafSize);	// minimum key of leaves[i]
 	}
-	return new BranchNode<number>(partitions, leaves);
+	return new BranchNode<number, number>(partitions, leaves);
 }
 
-function setRoot(tree: BTree<number, number>, root: object): void {
+// Since getCount()/rule 7 now read the stored _count (not a leaf walk), a hand-built root must also set the
+// count, or the tree reports 0 and fails rule 7. `count` is the true number of entries in `root` - even for the
+// intentionally-broken trees below, so the *intended* earlier rule fires rather than a spurious rule-7 failure.
+function setRoot(tree: BTree<number, number>, root: object, count: number): void {
 	(tree as any)['_root'] = root;
+	(tree as any)['_count'] = count;
 }
 
 describe('assertTreeInvariants (validator self-test)', () => {
@@ -55,7 +59,7 @@ describe('assertTreeInvariants (validator self-test)', () => {
 		});
 
 		it('a hand-built balanced branch', () => {
-			setRoot(tree, makeBranchOfLeaves(MinFill, MinFill, 0));
+			setRoot(tree, makeBranchOfLeaves(MinFill, MinFill, 0), MinFill * MinFill);
 			expect(() => assertTreeInvariants(tree)).to.not.throw();
 		});
 	});
@@ -64,58 +68,58 @@ describe('assertTreeInvariants (validator self-test)', () => {
 		it('rule 4: partition key not equal to min of right subtree', () => {
 			// This is the shape produced by the (benign) stale-partition path in bug #1: a partition that
 			// is a valid separator (31 < 50 <= 100) but is not the minimum key of the right subtree.
-			const root = new BranchNode<number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
-			setRoot(tree, root);
+			const root = new BranchNode<number, number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
+			setRoot(tree, root, 2 * MinFill);
 			expect(() => assertTreeInvariants(tree)).to.not.throw();	// sanity: valid before corruption
 			root.partitions[0] = 50;
 			expect(() => assertTreeInvariants(tree)).to.throw(/Partition violation \(rule 4\)/);
 		});
 
 		it('rule 4: a key in the left subtree is not < its partition', () => {
-			const root = new BranchNode<number>([20], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
-			setRoot(tree, root);
+			const root = new BranchNode<number, number>([20], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
+			setRoot(tree, root, 2 * MinFill);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Partition violation \(rule 4\)/);
 		});
 
 		it('rule 2: an underfilled non-root leaf', () => {
-			const root = new BranchNode<number>([100], [makeLeaf(0, MinFill - 1), makeLeaf(100, MinFill)]);
-			setRoot(tree, root);
+			const root = new BranchNode<number, number>([100], [makeLeaf(0, MinFill - 1), makeLeaf(100, MinFill)]);
+			setRoot(tree, root, (MinFill - 1) + MinFill);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Fill violation \(rule 2\)/);
 		});
 
 		it('rule 2: an overfull leaf', () => {
-			setRoot(tree, makeLeaf(0, NodeCapacity + 1));
+			setRoot(tree, makeLeaf(0, NodeCapacity + 1), NodeCapacity + 1);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Fill violation \(rule 2\)/);
 		});
 
 		it('rule 2: a root branch with fewer than two children', () => {
-			setRoot(tree, new BranchNode<number>([], [makeLeaf(0, MinFill)]));
+			setRoot(tree, new BranchNode<number, number>([], [makeLeaf(0, MinFill)]), MinFill);
 			expect(() => assertTreeInvariants(tree)).to.throw(/rule 2/);
 		});
 
 		it('rule 3: partitions length not equal to nodes length - 1', () => {
-			const root = new BranchNode<number>([100, 200], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
-			setRoot(tree, root);
+			const root = new BranchNode<number, number>([100, 200], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
+			setRoot(tree, root, 2 * MinFill);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Shape violation \(rule 3\)/);
 		});
 
 		it('rule 5: out-of-order keys within a leaf', () => {
-			setRoot(tree, new LeafNode<number>([0, 1, 2, 5, 4, 6]));
+			setRoot(tree, new LeafNode<number>([0, 1, 2, 5, 4, 6]), 6);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Order violation \(rule 5\)/);
 		});
 
 		it('rule 1: leaves at differing depths', () => {
 			const shallow = makeLeaf(0, MinFill);							// depth 1
 			const deep = makeBranchOfLeaves(MinFill, MinFill, 100);		// its leaves are depth 2
-			const root = new BranchNode<number>([100], [shallow, deep]);
-			setRoot(tree, root);
+			const root = new BranchNode<number, number>([100], [shallow, deep]);
+			setRoot(tree, root, MinFill + MinFill * MinFill);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Depth violation \(rule 1\)/);
 		});
 	});
 
 	describe('allowUnderfilledRoot option', () => {
 		it('accepts an underfilled root branch by default, rejects it when disabled', () => {
-			setRoot(tree, new BranchNode<number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]));
+			setRoot(tree, new BranchNode<number, number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]), 2 * MinFill);
 			expect(() => assertTreeInvariants(tree)).to.not.throw();
 			expect(() => assertTreeInvariants(tree, { allowUnderfilledRoot: false })).to.throw(/rule 2/);
 		});
@@ -187,8 +191,8 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			const child = new BTree<number, number>(idFn, cmp, base);
 
 			const orphanClone = new LeafNode<number>([200, 201], child);				// child-owned
-			const baseBranch = new BranchNode<number>([], [orphanClone], base);			// base-owned, but holds a child clone
-			const childRoot = new BranchNode<number>(
+			const baseBranch = new BranchNode<number, number>([], [orphanClone], base);			// base-owned, but holds a child clone
+			const childRoot = new BranchNode<number, number>(
 				[100],
 				[new LeafNode<number>([0, 1], child), baseBranch],						// child-owned root
 				child,
@@ -204,12 +208,12 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			const child = new BTree<number, number>(idFn, cmp, base);
 
 			const shared = new LeafNode<number>([5, 6], child);							// child-owned (mutable)
-			(child as any)['_root'] = new BranchNode<number>(
+			(child as any)['_root'] = new BranchNode<number, number>(
 				[100],
 				[shared, new LeafNode<number>([100, 101], base)],
 				child,
 			);
-			(base as any)['_root'] = new BranchNode<number>(
+			(base as any)['_root'] = new BranchNode<number, number>(
 				[100],
 				[shared, new LeafNode<number>([100, 101], base)],						// same `shared` object
 				base,

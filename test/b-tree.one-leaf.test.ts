@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { BTree, KeyBound, KeyRange } from '../src/index.js';
+import { BTree, KeyBound, KeyRange, PathNotOnEntryError } from '../src/index.js';
 
 describe('One leaf, key-only, B+Tree', () => {
   let tree: BTree<number, number>;
@@ -238,9 +238,9 @@ describe('One leaf, key-only, B+Tree', () => {
 		result = tree.updateAt(tree.find(4), 4);
 		expect(result[0].on).to.be.true;
 		expect(result[1]).to.be.true;	// updated
-		result = tree.updateAt(tree.find(2), 4);
-		expect(result[0].on).to.be.false;
-		expect(result[1]).to.be.true;
+		// updateAt on an off-entry path (2 is absent - it was moved to 4 above) is caller misuse: it throws rather
+		// than reporting a no-op as an update (the old contract returned [path(on=false), wasUpdate=true]).
+		expect(() => tree.updateAt(tree.find(2), 4), 'off-entry path -> throws').to.throw(PathNotOnEntryError);
 		result = tree.updateAt(tree.find(4), 3);
 		expect(result[0].on).to.be.false;	// failed
 		expect(result[1]).to.be.false;	// insert key already exists

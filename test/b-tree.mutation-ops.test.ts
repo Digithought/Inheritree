@@ -1,7 +1,8 @@
 import { expect } from 'chai';
-import { BTree, NodeCapacity } from '../src/index.js';
-import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { BTree, NodeCapacity, PathNotOnEntryError } from '../src/index.js';
+import { BranchNode, TreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 
 // Multi-level (>= 2-level, > NodeCapacity entries) coverage for the three mutation entry points that the
@@ -28,15 +29,15 @@ const MIN = C >>> 1;	// 32 = minimum fill for a non-root leaf
 // --- construction / inspection helpers ---------------------------------------------------------------
 
 // Minimum key reachable from a node (descend leftmost), used to derive branch partitions.
-const minKey = (node: ITreeNode): number => {
+const minKey = (node: TreeNode<number, number>): number => {
 	let n: any = node;
 	while (n instanceof BranchNode) n = n.nodes[0];
 	return (n as LeafNode<number>).entries[0];
 };
 
 // A branch whose partitions follow the tree's invariant: partition[i] === min key of nodes[i+1].
-const branchOf = (children: ITreeNode[]): BranchNode<number> =>
-	new BranchNode<number>(children.slice(1).map(minKey), children);
+const branchOf = (children: TreeNode<number, number>[]): BranchNode<number, number> =>
+	new BranchNode<number, number>(children.slice(1).map(minKey), children);
 
 const leafOf = (entries: number[]): LeafNode<number> => new LeafNode(entries);
 
@@ -53,9 +54,9 @@ const ascendingValues = <T>(tree: BTree<any, T>): T[] => {
 
 // A shape fingerprint (partition keys + leaf fill counts, recursively) - deep-equal before/after a
 // value-only op proves no split/rebalance/rebuild occurred.
-const structureOf = (node: ITreeNode): any => {
+const structureOf = (node: TreeNode<unknown, unknown>): any => {
 	if (node instanceof LeafNode) return ['leaf', node.entries.length];
-	const b = node as BranchNode<unknown>;
+	const b = node as BranchNode<unknown, unknown>;
 	return ['branch', [...b.partitions], b.nodes.map(structureOf)];
 };
 const shapeOf = (tree: BTree<any, any>) => structureOf((tree as any)['_root']);
@@ -70,6 +71,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// root -> 4 full leaves, spaced so a fresh key lands strictly inside the second leaf.
 			const root = branchOf([leafOf(seq(0, C)), leafOf(seq(1000, C)), leafOf(seq(2000, C)), leafOf(seq(3000, C))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 4 * C;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);	// 256 keys
 
@@ -80,7 +82,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			expect(tree.at(tree.next(result)), 'next() off the crack lands on the new entry').to.equal(NEW);
 			assertTreeInvariants(tree);
 			expect(root.nodes.length, 'the leaf split added one child to the root branch').to.equal(5);
-			expect(tree.find(NEW).branches.length, 'height unchanged (still 2-level)').to.equal(1);
+			expect(asImpl(tree.find(NEW)).branches.length, 'height unchanged (still 2-level)').to.equal(1);
 			expect(tree.get(NEW)).to.equal(NEW);
 			expect(ascendingValues(tree)).to.deep.equal([...before, NEW].sort((a, b) => a - b));
 		});
@@ -88,6 +90,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('inserting a new key at a full leaf tail splits with the new key in the new leaf (delta 1)', () => {
 			const root = branchOf([leafOf(seq(0, C)), leafOf(seq(1000, C)), leafOf(seq(2000, C))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * C;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -110,7 +113,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			assertTreeInvariants(dict);
 
 			const target = 150;
-			expect(dict.find(target).branches.length, 'target sits below a branch (multi-level)').to.be.greaterThan(0);
+			expect(asImpl(dict.find(target)).branches.length, 'target sits below a branch (multi-level)').to.be.greaterThan(0);
 			const beforeShape = shapeOf(dict);
 			const rootBefore = (dict as any)['_root'];
 
@@ -133,6 +136,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('insert branch: a merge of an absent key splits a full leaf and leaves the path on the new row', () => {
 			const root = branchOf([leafOf(seq(0, C)), leafOf(seq(1000, C)), leafOf(seq(2000, C))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * C;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -153,7 +157,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			assertTreeInvariants(dict);
 
 			const target = 120;
-			expect(dict.find(target).branches.length).to.be.greaterThan(0);
+			expect(asImpl(dict.find(target)).branches.length).to.be.greaterThan(0);
 			const beforeShape = shapeOf(dict);
 
 			// newEntry is ignored because the key is present; getUpdated keeps the same id (so it is a value-only
@@ -175,6 +179,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// the random stream) only ever keep the key, so this is the sole end-to-end cover of that path.
 			const root = branchOf([leafOf(seq(0, MIN + 4)), leafOf(seq(100, MIN + 4)), leafOf(seq(200, MIN + 4))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * (MIN + 4);	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -194,6 +199,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('conflict: getUpdated returning an already-present key leaves the path off and the tree unchanged', () => {
 			const root = branchOf([leafOf(seq(0, MIN)), leafOf(seq(100, MIN)), leafOf(seq(200, MIN))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * MIN;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 			const beforeShape = shapeOf(tree);
@@ -218,7 +224,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			assertTreeInvariants(dict);
 
 			const target = 2500;
-			expect(dict.find(target).branches.length, 'genuinely deep (>= 3 levels)').to.be.greaterThanOrEqual(2);
+			expect(asImpl(dict.find(target)).branches.length, 'genuinely deep (>= 3 levels)').to.be.greaterThanOrEqual(2);
 			const beforeShape = shapeOf(dict);
 			const rootBefore = (dict as any)['_root'];
 
@@ -243,6 +249,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// inserted new key forces in the full middle leaf.
 			const root = branchOf([leafOf(seq(0, MIN + 4)), leafOf(seq(1000, C)), leafOf(seq(2000, MIN + 4))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = (MIN + 4) + C + (MIN + 4);	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -265,6 +272,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// and the root loses a child.
 			const root = branchOf([leafOf(seq(0, MIN)), leafOf(seq(100, MIN)), leafOf(seq(200, MIN)), leafOf(seq(300, MIN + 4))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * MIN + (MIN + 4);	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -284,6 +292,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('(c) the new key already exists -> failure path, tree left unchanged', () => {
 			const root = branchOf([leafOf(seq(0, MIN)), leafOf(seq(100, MIN)), leafOf(seq(200, MIN))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * MIN;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 			const beforeShape = shapeOf(tree);
@@ -330,7 +339,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 				shadow.set(id, `i${id}`);
 			}
 			assertTreeInvariants(dict);
-			expect(dict.find(2048).branches.length, '>= 3 levels deep').to.be.greaterThanOrEqual(2);
+			expect(asImpl(dict.find(2048)).branches.length, '>= 3 levels deep').to.be.greaterThanOrEqual(2);
 
 			// Phase 2: mixed op stream, sampling full set-equality + structural invariants periodically.
 			const OPS = 6000;
@@ -401,5 +410,46 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			expect(finalEntries.map(e => e.id)).to.deep.equal([...shadow.keys()].sort((a, b) => a - b));
 			for (const e of finalEntries) expect(e.value).to.equal(shadow.get(e.id));
 		}).timeout(20000);
+	});
+
+	// Operation result / side-effect contract: each op must report what it actually did. A rejected insert must
+	// not leave a permanent side effect on the caller's object; a no-op update must not masquerade as success.
+	describe('operation result / side-effect contract', () => {
+		it('2.3 a successful insert freezes the entry; a rejected duplicate leaves the caller\'s object untouched', () => {
+			const dict = new BTree<number, Entry>(e => e.id);
+			const first = { id: 1, value: 'a' };
+			expect(dict.insert(first).on, 'first insert succeeds').to.be.true;
+			expect(Object.isFrozen(first), 'a successfully inserted entry is frozen').to.be.true;
+
+			const dup = { id: 1, value: 'b' };
+			expect(dict.insert(dup).on, 'duplicate key is rejected').to.be.false;
+			expect(Object.isFrozen(dup), 'a rejected duplicate must NOT be frozen - nothing was added').to.be.false;
+			expect(dict.get(1)!.value, 'the original entry is untouched').to.equal('a');
+		});
+
+		it('2.4 updateAt on an off-entry (crack) path throws PathNotOnEntryError and writes nothing', () => {
+			const tree = new BTree<number, number>();
+			tree.insert(1);
+			tree.insert(9);
+			const crack = tree.find(5);	// between 1 and 9 -> valid path, but not on an entry
+			expect(crack.on).to.be.false;
+			expect(() => tree.updateAt(crack, 5)).to.throw(PathNotOnEntryError);
+			expect(tree.get(5), 'no phantom entry written').to.be.undefined;
+		});
+
+		it('2.4 a same-key update still reports wasUpdate=true; a key-change still reports wasUpdate=false', () => {
+			const dict = new BTree<number, Entry>(e => e.id);
+			dict.insert({ id: 1, value: 'a' });
+			dict.insert({ id: 2, value: 'b' });
+
+			const [samePath, wasUpdate] = dict.updateAt(dict.find(1), { id: 1, value: 'A' });
+			expect(wasUpdate, 'same key -> genuine update').to.be.true;
+			expect(dict.at(samePath)!.value).to.equal('A');
+
+			const [movedPath, wasUpdate2] = dict.updateAt(dict.find(2), { id: 3, value: 'C' });
+			expect(wasUpdate2, 'key change -> reported as insert, not update').to.be.false;
+			expect(dict.at(movedPath)!.id).to.equal(3);
+			expect(dict.get(2), 'old key removed').to.be.undefined;
+		});
 	});
 });

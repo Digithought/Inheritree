@@ -51,7 +51,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 		let n: ITreeNode | undefined = node;
 		while (n instanceof BranchNode) {
 			depth++;
-			n = (n as BranchNode<number>).nodes[0];
+			n = (n as BranchNode<number, any>).nodes[0];
 		}
 		return depth;
 	}
@@ -75,7 +75,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 		let node = (tree as any)['_root'] as ITreeNode | undefined;
 		expect(node, 'leafForKey requires a local root').to.not.equal(undefined);
 		while (node instanceof BranchNode) {
-			const b = node as BranchNode<number>;
+			const b = node as BranchNode<number, any>;
 			node = b.nodes[childIndex(b.partitions, key)];
 		}
 		return node as LeafNode<Entry>;
@@ -86,7 +86,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 		const out: LeafNode<Entry>[] = [];
 		const visit = (node: ITreeNode): void => {
 			if (node instanceof BranchNode) {
-				for (const c of (node as BranchNode<number>).nodes) visit(c);
+				for (const c of (node as BranchNode<number, any>).nodes) visit(c);
 			} else {
 				out.push(node as LeafNode<Entry>);
 			}
@@ -108,7 +108,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 			seen.add(node);
 			if (node.tree === owner) n++;
 			if (node instanceof BranchNode) {
-				for (const c of (node as BranchNode<number>).nodes) stack.push(c);
+				for (const c of (node as BranchNode<number, any>).nodes) stack.push(c);
 			}
 		}
 		return n;

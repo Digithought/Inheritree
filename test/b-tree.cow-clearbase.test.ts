@@ -56,7 +56,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 		let n: ITreeNode | undefined = node;
 		while (n instanceof BranchNode) {
 			depth++;
-			n = (n as BranchNode<number>).nodes[0];
+			n = (n as BranchNode<number, any>).nodes[0];
 		}
 		return depth;
 	}
@@ -79,7 +79,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 	function leafForKey(tree: BTree<number, Entry>, key: number): LeafNode<Entry> {
 		let node: ITreeNode = tree.root;
 		while (node instanceof BranchNode) {
-			const b = node as BranchNode<number>;
+			const b = node as BranchNode<number, any>;
 			node = b.nodes[childIndex(b.partitions, key)];
 		}
 		return node as LeafNode<Entry>;

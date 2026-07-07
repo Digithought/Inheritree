@@ -53,7 +53,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 		let n: ITreeNode | undefined = node;
 		while (n instanceof BranchNode) {
 			depth++;
-			n = (n as BranchNode<number>).nodes[0];
+			n = (n as BranchNode<number, any>).nodes[0];
 		}
 		return depth;
 	}
@@ -81,7 +81,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 		while (node) {
 			chain.push(node);
 			if (node instanceof BranchNode) {
-				const b = node as BranchNode<number>;
+				const b = node as BranchNode<number, any>;
 				node = b.nodes[childIndex(b.partitions, key)];
 			} else {
 				break;
@@ -100,7 +100,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 		const out: LeafNode<Entry>[] = [];
 		const visit = (node: ITreeNode): void => {
 			if (node instanceof BranchNode) {
-				for (const c of (node as BranchNode<number>).nodes) visit(c);
+				for (const c of (node as BranchNode<number, any>).nodes) visit(c);
 			} else {
 				out.push(node as LeafNode<Entry>);
 			}

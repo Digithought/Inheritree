@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { BTree, KeyBound, KeyRange, NodeCapacity } from '../src/index.js';
 import { BranchNode, LeafNode } from '../src/nodes.js';
+import { asImpl } from './helpers/path-impl.js';
 
 // Regression matrix for the forward-only "navigation from an end-of-leaf crack never advances" bug.
 //
@@ -56,7 +57,7 @@ describe('Crack navigation (end-of-leaf and boundary cracks advance correctly)',
 		});
 
 		it('crack after the last entry (== end of the only leaf): next stays off, prior advances back', () => {
-			const crack = tree.find(3.5);
+			const crack = asImpl(tree.find(3.5));
 			expect(crack.on).to.be.false;
 			expect(crack.leafIndex).to.equal(crack.leafNode.entries.length);	// end-of-leaf crack
 			expect(tree.next(crack).on).to.be.false;	// nothing after the tree end
@@ -113,7 +114,7 @@ describe('Crack navigation (end-of-leaf and boundary cracks advance correctly)',
 		});
 
 		it('crack past the tree end stays off, prior advances back', () => {
-			const crack = tree.find(645);
+			const crack = asImpl(tree.find(645));
 			expect(crack.on).to.be.false;
 			expect(crack.leafIndex).to.equal(crack.leafNode.entries.length);	// end-of-leaf crack on the last leaf
 			expect(tree.next(crack).on).to.be.false;
@@ -165,7 +166,7 @@ describe('Crack navigation (end-of-leaf and boundary cracks advance correctly)',
 			let firstCrossBranchKey = -1;
 
 			for (let k = 0; k < count - 1; k++) {
-				const crack = tree.find(k + 0.5);
+				const crack = asImpl(tree.find(k + 0.5));
 				expect(crack.on).to.be.false;
 				if (crack.leafIndex !== crack.leafNode.entries.length) {
 					continue;	// mid-leaf crack; not a boundary
@@ -202,7 +203,7 @@ describe('Crack navigation (end-of-leaf and boundary cracks advance correctly)',
 		});
 
 		it('crack past the tree end stays off, prior advances back', () => {
-			const crack = tree.find(count - 0.5);	// after the last entry (count - 1)
+			const crack = asImpl(tree.find(count - 0.5));	// after the last entry (count - 1)
 			expect(crack.on).to.be.false;
 			expect(crack.leafIndex).to.equal(crack.leafNode.entries.length);
 			expect(tree.next(crack).on).to.be.false;

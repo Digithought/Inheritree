@@ -41,7 +41,7 @@ describe('BTree COW insert splitting', () => {
 		let n: ITreeNode | undefined = node;
 		while (n instanceof BranchNode) {
 			depth++;
-			n = (n as BranchNode<number>).nodes[0];
+			n = (n as BranchNode<number, any>).nodes[0];
 		}
 		return depth;
 	}
@@ -51,7 +51,7 @@ describe('BTree COW insert splitting', () => {
 	 * before/after — with depth held constant — proves an intermediate branch actually split. */
 	function rootChildCount(tree: BTree<number, number>): number {
 		const r = tree.root;
-		return r instanceof BranchNode ? (r as BranchNode<number>).nodes.length : 0;
+		return r instanceof BranchNode ? (r as BranchNode<number, any>).nodes.length : 0;
 	}
 
 	/** assertTreeInvariants needs a local root to validate; a COW child with no writes legitimately has
