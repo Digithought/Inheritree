@@ -105,6 +105,39 @@ describe('Iteration ergonomics: entries / keys / for..of', () => {
 	});
 });
 
+describe('KeyRange / KeyBound accept plain object literals (no new)', () => {
+	// The hygiene-cleanup ticket made KeyBound.inclusive and KeyRange.isAscending optional so a bare object
+	// literal structurally satisfies the argument type. These tests are the durable guarantee that the literal
+	// form works AND resolves the omitted fields to the same defaults (inclusive=true, isAscending=true) that
+	// the old `= true` constructor defaults gave - i.e. a literal is behaviorally identical to the `new` form.
+	const N = 200;
+
+	it('a bare literal with omitted inclusive/isAscending == the new KeyBound/KeyRange equivalent (defaults true)', () => {
+		const tree = buildSet(N);
+		const literal = rangeValues(tree, { first: { key: 20 }, last: { key: 60 } });
+		const constructed = rangeValues(tree, new KeyRange(new KeyBound(20), new KeyBound(60)));
+		expect(literal, 'literal matches the constructed form').to.deep.equal(constructed);
+		// omitted inclusive defaults to true on both bounds -> [20..60] inclusive.
+		expect(literal, 'both bounds inclusive by default').to.deep.equal([...Array(41).keys()].map(i => i + 20));
+	});
+
+	it('explicit inclusive: false on a literal bound excludes that endpoint', () => {
+		const tree = buildSet(N);
+		const literal = rangeValues(tree, { first: { key: 20 }, last: { key: 60, inclusive: false } });
+		const constructed = rangeValues(tree, new KeyRange(new KeyBound(20, true), new KeyBound(60, false), true));
+		expect(literal).to.deep.equal(constructed);
+		expect(literal, 'last endpoint (60) excluded -> [20..59]').to.deep.equal([...Array(40).keys()].map(i => i + 20));
+	});
+
+	it('explicit isAscending: false on a literal range walks descending', () => {
+		const tree = buildSet(N);
+		const literal = rangeValues(tree, { first: { key: 100, inclusive: false }, last: { key: 95 }, isAscending: false });
+		const constructed = rangeValues(tree, new KeyRange(new KeyBound(100, false), new KeyBound(95, true), false));
+		expect(literal).to.deep.equal(constructed);
+		expect(literal, 'descending, first excluded -> [99..95]').to.deep.equal([99, 98, 97, 96, 95]);
+	});
+});
+
 describe('Iteration ergonomics: clear()', () => {
 	it('empties the tree, invalidates outstanding paths, and leaves it reusable', () => {
 		const tree = buildSet(200);

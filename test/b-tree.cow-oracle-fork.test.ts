@@ -93,6 +93,10 @@ function levelsOf(tree: BTree<number, Entry>): number {
 // semantics (direction-dependent bound roles; an omitted bound is open; a crossed range yields nothing).
 function modelRange(sortedAsc: number[], range: KeyRange<number>): number[] {
 	const { first, last, isAscending } = range;
+	// NOTE: inclusive/isAscending default to true in b-tree.ts (treated as "!== false"), but this oracle reads
+	// them truthily, so an omitted (undefined) inclusive/isAscending here would model as exclusive/descending -
+	// diverging from the real tree. Safe only because randomRange() always supplies explicit booleans; if you
+	// ever feed a default-bound KeyRange into this model, switch these reads to `!== false` to match b-tree.ts.
 	const passesAsc = (k: number) =>
 		(first ? (first.inclusive ? k >= first.key : k > first.key) : true) &&
 		(last ? (last.inclusive ? k <= last.key : k < last.key) : true);
