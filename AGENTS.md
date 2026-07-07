@@ -22,7 +22,7 @@ Lightweight, fast in-memory B+Tree in TypeScript. Generic over `TKey`/`TEntry`; 
 
 - **Paths are versioned cursors.** Any mutation bumps `_version` and invalidates all outstanding paths except the one a mutation method returns. Public methods validate the path version and throw on stale paths. Only `moveNext`/`movePrior` mutate a path in place; everything else returns a new one.
 - **`on`** = cursor is on an entry vs. in a "crack" between/beyond entries. `find` returns the entry or the crack before it; `next`/`prior` move to the nearest match from a crack.
-- **Entries are frozen on insert** to deter key mutation — but freezing is shallow and non-transitive. Never mutate a key after insert; use `updateAt`/`upsert`/`merge`/`deleteAt`.
+- **Entries are frozen on insert** (by default; opt out with the `freeze: false` constructor option — see `BTreeOptions`) to deter key mutation — but freezing is shallow and non-transitive. Never mutate a key after insert; use `updateAt`/`upsert`/`merge`/`deleteAt`.
 - **Sort consistency over correctness.** The default compare uses `<`/`>`; a custom `compare` must be consistent, but the tree does not police Ecmascript comparison quirks.
 - Public API: `insert`, `updateAt`, `deleteAt`, `upsert`, `merge`, `find`, `get`, `at`, `first`, `last`, `next`/`prior`, `moveNext`/`movePrior`, `ascending`/`descending`, `range`, `getCount`, `isValid`. All complexity O(log n); `getCount` is computed, not stored.
 
