@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digitree Code Review — v1.4.9</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1f27; --muted: #5b6572; --border: #d9dee5;
+    --card: #f6f8fa; --code-bg: #f0f2f5; --accent: #0b5fa5;
+    --crit: #b3261e; --high: #c2410c; --med: #a16207; --low: #3f6212; --info: #475569;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181d; --fg: #dfe4ea; --muted: #94a0ad; --border: #313a44;
+      --card: #1b2129; --code-bg: #20272f; --accent: #6cb2e8;
+      --crit: #f28b82; --high: #f0a06a; --med: #e2c04c; --low: #a3c76d; --info: #9fb0c0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 60rem; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 .25rem; }
+  h2 { font-size: 1.4rem; margin: 2.8rem 0 .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.1rem; margin: 1.8rem 0 .5rem; }
+  p, li { max-width: 75ch; }
+  .meta { color: var(--muted); margin-bottom: 2rem; }
+  code, pre { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .875em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1.1rem; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
+  th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
+  .table-wrap { overflow-x: auto; }
+  .sev { font-weight: 700; white-space: nowrap; }
+  .sev.crit { color: var(--crit); } .sev.high { color: var(--high); }
+  .sev.med { color: var(--med); } .sev.low { color: var(--low); } .sev.info { color: var(--info); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin: 1rem 0; }
+  .card.verified { border-left: 4px solid var(--crit); }
+  .tag { display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+         border-radius: 999px; padding: .1rem .6rem; border: 1px solid currentColor; margin-left: .5rem; vertical-align: middle; }
+  .tag.verified { color: var(--crit); }
+  .tag.suggest { color: var(--info); }
+  .loc { color: var(--muted); font-size: .85rem; }
+  a { color: var(--accent); }
+  .note { color: var(--muted); font-size: .9rem; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Digitree Code Review</h1>
+<p class="meta">Version 1.4.9 &middot; <code>src/</code> (b-tree.ts, nodes.ts, path.ts, key-range.ts, index.ts) &middot; July&nbsp;2026<br>
+Findings marked <strong>Verified</strong> were reproduced by executing probe scripts against the built <code>dist/</code> output; the probe script and its raw results are in the appendix.</p>
+
+<h2 id="summary">Summary</h2>
+<p>This is a genuinely small, fast, well-shaped B+Tree. The node layout (flat 64-wide arrays, <code>instanceof</code> dispatch, splice-based mutation), the versioned-path invalidation scheme, and the split/rebalance logic are all sound — a stress probe of 5,000 inserts followed by 2,500 interleaved deletes kept ordering and count intact. The review found <strong>one significant correctness bug</strong> (with a second symptom in <code>range()</code>), a handful of API sharp edges, and several worthwhile performance and cleanliness improvements.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Severity</th><th>Finding</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td class="sev crit">Critical</td><td><code>next()</code> fails to advance from a crack at the end of a leaf — breaks "find nearest"</td><td><code>b-tree.ts:347</code></td></tr>
+    <tr><td>2</td><td class="sev crit">Critical</td><td><code>range()</code> silently returns empty when the start bound lands on an end-of-leaf crack (same root cause as #1)</td><td><code>b-tree.ts:266</code></td></tr>
+    <tr><td>3</td><td class="sev high">High</td><td>Iterators yield the <em>same mutated</em> <code>Path</code> object — collecting paths gives N references to one dead cursor</td><td><code>b-tree.ts:250</code></td></tr>
+    <tr><td>4</td><td class="sev high">High</td><td>Comparator invoked twice per comparison by the consistency check; the check itself only catches a narrow class of inconsistency</td><td><code>b-tree.ts:242</code></td></tr>
+    <tr><td>5</td><td class="sev med">Medium</td><td>Failed (duplicate) <code>insert</code> still freezes the caller's object</td><td><code>b-tree.ts:96</code></td></tr>
+    <tr><td>6</td><td class="sev med">Medium</td><td><code>updateAt</code> on an off-entry path reports <code>wasUpdate: true</code> for a no-op</td><td><code>b-tree.ts:112</code></td></tr>
+    <tr><td>7</td><td class="sev med">Medium</td><td><code>Path</code> internals fully public and mutable; <code>ITreeNode</code> is an empty interface (no type safety on casts)</td><td><code>path.ts</code>, <code>nodes.ts</code></td></tr>
+    <tr><td>8</td><td class="sev low">Low</td><td>Recursive descent + <code>unshift</code>/<code>splice</code> allocation churn; redundant partition update; duplicated mirror-image code</td><td>various</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="correctness">1. Correctness bugs</h2>
+
+<div class="card verified">
+<h3 style="margin-top:0">1.1 <code>next()</code> from an end-of-leaf crack never advances <span class="tag verified">Verified</span></h3>
+<p class="loc">b-tree.ts:347–380 (<code>internalNext</code>)</p>
+<p>When <code>find(key)</code> misses, it returns a crack at the insertion point. If that insertion point is the <em>end of a leaf</em> (the sought key falls between the last entry of one leaf and the first entry of the next), <code>internalNext</code> gets a path with <code>on === false</code> and <code>leafIndex === entries.length</code>. The crack-recovery block sets <code>on</code> back to <code>false</code> (index out of range) and then <strong>returns without advancing</strong>, because the leaf-advance logic lives in the <code>else</code> chain that is only reachable when <code>on === true</code>:</p>
+<pre><code>private internalNext(path: Path&lt;TKey, TEntry&gt;) {
+    if (!path.on) {  // Attempt to move off of crack
+        path.on = path.branches.every(...) &amp;&amp; path.leafIndex &lt; path.leafNode.entries.length;
+        if (path.on) return;
+        // &lt;-- falls out of the function here; the "advance to next leaf" logic below is unreachable
+    } else if (path.leafIndex &gt;= path.leafNode.entries.length - 1) {
+        ... // pops branches and moves to the first entry of the next leaf
+    }
+    ...
+}</code></pre>
+<p><strong>Reproduction</strong> (NodeCapacity = 64, so 65 inserts force one split; leaves become 0–310 and 320–640):</p>
+<pre><code>const tree = new BTree&lt;number, number&gt;();
+for (let i = 0; i &lt;= 64; i++) tree.insert(i * 10);
+const crack = tree.find(315);          // crack at end of first leaf
+tree.at(tree.next(crack));             // → undefined   (expected 320)
+tree.at(tree.next(tree.find(15)));     // → 20          (mid-leaf crack works)</code></pre>
+<p>The README explicitly advertises <em>"Find nearest, using <code>next</code> on an unsuccessful path"</em>, and <code>internalPrior</code> handles its mirror case correctly (<code>prior(find(315))</code> → 310), so this is an asymmetry bug, not a design decision. It silently produces wrong results — no exception — which is the worst failure mode for a storage primitive.</p>
+<p><strong>Suggested fix:</strong> when crack recovery fails because the crack sits at/after the end of the leaf, fall through to the same pop-and-advance logic used for the last-entry case instead of returning. Sketch:</p>
+<pre><code>if (!path.on) {
+    path.on = path.branches.every(b =&gt; b.index &gt;= 0 &amp;&amp; b.index &lt; b.node.nodes.length)
+        &amp;&amp; path.leafIndex &gt;= 0 &amp;&amp; path.leafIndex &lt; path.leafNode.entries.length;
+    if (path.on || path.leafIndex &lt; path.leafNode.entries.length) {
+        return;   // recovered onto an entry, or crack precedes an entry in this leaf
+    }
+    // end-of-leaf crack: fall through to advance into the next leaf
+}
+if (path.leafIndex &gt;= path.leafNode.entries.length - (path.on ? 1 : 0)) {
+    ... existing pop/moveToFirst logic (moveToFirst already sets leafIndex/on correctly)
+} else {
+    ++path.leafIndex;
+    path.on = true;
+}</code></pre>
+<p>Add regression tests for cracks in all four positions: before the first entry of the tree, mid-leaf, between two leaves (this bug), and after the last entry of the tree — for both <code>next</code> and <code>prior</code>.</p>
+</div>
+
+<div class="card verified">
+<h3 style="margin-top:0">1.2 <code>range()</code> returns empty for a start bound on an end-of-leaf crack <span class="tag verified">Verified</span></h3>
+<p class="loc">b-tree.ts:266–276 (<code>findFirst</code>), b-tree.ts:62–84 (<code>range</code>)</p>
+<p>Same root cause, second public symptom. <code>findFirst</code> uses <code>internalNext</code> to step off a missed start bound, so a range whose (non-matching) start key lands between leaves begins iteration on an off path, and the loop's <code>!path.on</code> guard exits immediately:</p>
+<pre><code>// leaves are 0–310 and 320–640
+[...tree.range(new KeyRange(new KeyBound(315), new KeyBound(345)))]
+// → []   (expected paths to 320, 330, 340)</code></pre>
+<p>Fixing 1.1 fixes this too, but <code>range()</code> deserves its own regression tests with bounds straddling leaf boundaries in both directions (a descending range with a missed <em>last</em> bound exercises the same code path via <code>findLast</code>).</p>
+</div>
+
+<h3>1.3 Redundant partition update in leaf merge (harmless, but worth a comment)</h3>
+<p class="loc">b-tree.ts:618–620 (<code>rebalanceLeaf</code>, merge-right case)</p>
+<p>When merging the right sibling into the leaf, the <code>pIndex === 0</code> branch re-writes an ancestor partition to <code>keyFromEntry(leaf.entries[0])</code>. Since a non-root leaf can never be empty at this point (underflow threshold is 32) and a deletion at index 0 already updated ancestors at <code>b-tree.ts:434</code>, and merging right never changes <code>entries[0]</code>, this write appears to always store the value already present. Not a bug — but partition maintenance is the subtlest part of this file, and the existing comment at line 676 shows a corruption bug already lived here once. Either delete the redundant call with a comment explaining why it's unnecessary, or keep it and note it's defensive. Better yet, see the invariant-checker suggestion in §6.</p>
+
+<h2 id="robustness">2. Robustness &amp; API sharp edges</h2>
+
+<h3>2.1 Iterators yield one shared, mutated <code>Path</code> object <span class="tag verified">Verified</span></h3>
+<p class="loc">b-tree.ts:250–264 (<code>internalAscending</code>/<code>internalDescending</code>)</p>
+<p>The generators yield the <em>same</em> path instance every iteration and mutate it in place. Anyone who does the natural thing —</p>
+<pre><code>const paths = [...tree.ascending(tree.first())];
+paths.map(p =&gt; tree.at(p));   // → [undefined, undefined, undefined]</code></pre>
+<p>— gets N references to a single cursor parked off the end of the tree. The README examples always consume <code>tree.at(path)</code> inside the loop, so this works until a user deviates slightly. Options, in order of preference:</p>
+<ul>
+  <li>Provide entry-yielding convenience iterators (<code>entries(range?)</code>, <code>keys()</code>, <code>[Symbol.iterator]</code>) as the documented default — they sidestep the aliasing entirely and remove the <code>tree.at(path)</code> ceremony from the 95% case. Keep the path-yielding iterators for cursor-level work.</li>
+  <li>Or yield <code>path.clone()</code> per step (costs one small allocation per element).</li>
+  <li>At minimum, document loudly that yielded paths are live and must be cloned to retain.</li>
+</ul>
+
+<h3>2.2 The comparator consistency check doubles comparator calls and catches little</h3>
+<p class="loc">b-tree.ts:242–248 (<code>compareKeys</code>)</p>
+<pre><code>const result = this.compare(a, b);
+if (result !== 0 &amp;&amp; result === this.compare(b, a)) {
+    throw new Error("Inconsistent comparison function for given values");
+}</code></pre>
+<p>Two problems:</p>
+<ul>
+  <li><strong>Cost:</strong> every non-equal comparison invokes the user comparator twice. Measured: a single <code>find</code> in a 1,000-entry tree makes 19 comparator invocations for ~10 logical comparisons. For expensive comparators (string collation, composite keys) this roughly halves search throughput of the hottest path in the library.</li>
+  <li><strong>Coverage:</strong> the check only fires when both directions return the <em>identical</em> non-zero value. It misses <code>compare(a,b) === -1</code> with <code>compare(b,a) === -2</code> (fine in practice) but also misses <code>compare(a,b) === -1</code> with <code>compare(b,a) === 0</code> — a genuine inconsistency. So the tree pays double for a partial guarantee.</li>
+</ul>
+<p><strong>Suggestion:</strong> make the check opt-in (constructor option or a <code>DebugBTree</code> subclass — the method is already <code>protected</code> and documented as overridable, so the machinery exists; flip the default). A cheaper always-on alternative: validate the comparator once with a few sentinel probes at construction, or check only the first N comparisons.</p>
+
+<h3>2.3 Failed <code>insert</code> freezes the caller's object <span class="tag verified">Verified</span></h3>
+<p class="loc">b-tree.ts:95–102</p>
+<p><code>insert</code> calls <code>Object.freeze(entry)</code> before checking for a key conflict. On a duplicate, the insert is rejected but the caller's object is now permanently frozen — a surprising side effect on a failed operation (verified: <code>Object.isFrozen(dup) === true</code> after a rejected insert). Move the freeze after the conflict check (i.e., freeze inside <code>internalInsertAt</code>, or only when <code>path.on</code> comes back true).</p>
+
+<h3>2.4 <code>updateAt</code> on an off-entry path returns <code>[path, true]</code></h3>
+<p class="loc">b-tree.ts:104–122, 412–428</p>
+<p>If the given path is not on an entry, nothing happens, yet the result says <code>wasUpdate: true</code>. The doc comment does explain this encoding, but "it was an update" for an operation that did nothing is a trap; callers must check <code>path.on</code> <em>and</em> interpret <code>wasUpdate</code> jointly. Consider a three-state result, throwing on an off-entry path (it's a caller error, and the library already throws for stale paths), or at least renaming the doc so the failure mode is impossible to misread.</p>
+
+<h3>2.5 <code>deleteAt</code> leaves the caller with no usable path</h3>
+<p class="loc">b-tree.ts:163–170</p>
+<p>The rebalancing code carefully keeps the passed path coherent (adjusting <code>leafNode</code>/<code>leafIndex</code> through borrows and merges), but <code>deleteAt</code> bumps <code>_version</code> without stamping it onto the path — so the one path that <em>is</em> still positionally correct is unusable. Setting <code>path.version = ++this._version</code> would hand back a valid crack at the deletion point, enabling the very common "delete while iterating" pattern (<code>deleteAt</code> then <code>moveNext</code>) without a re-<code>find</code>. This mirrors what <code>insert</code>/<code>updateAt</code>/<code>upsert</code> already do for their returned paths.</p>
+
+<h2 id="performance">3. Performance opportunities</h2>
+<p>Roughly in order of expected payoff:</p>
+<ol>
+  <li><strong>Comparator double-call</strong> (§2.2) — the single biggest lever; it sits inside every binary-search probe at every tree level.</li>
+  <li><strong>Optional freezing.</strong> <code>Object.freeze</code> on every insert costs real time in bulk loads (hidden-class transition + the call itself) while providing only shallow protection the README already disclaims. A constructor option (<code>{ freeze: false }</code>) keeps safety-by-default and gives bulk loaders an out.</li>
+  <li><strong>Iterative descent.</strong> <code>getPath</code>, <code>getFirst</code>, <code>getLast</code> recurse to the leaf and then <code>unshift</code> each <code>PathBranch</code> on the way back up — O(depth²) element moves plus a frame per level. A simple loop pushing into a preallocated array is flatter and allocation-friendlier. Similarly, <code>path.branches.splice(-popCount, popCount)</code> in <code>internalNext</code>/<code>internalPrior</code> allocates the removed-elements array on every leaf transition; <code>path.branches.length -= popCount</code> is free.</li>
+  <li><strong><code>range()</code> end test.</strong> The loop calls the user comparator (twice, per §2.2) for every yielded element to test the end bound. Since the end is a fixed position and iteration is strictly sequential, comparing positions is sufficient and free: capture <code>endPath.leafNode</code>/<code>endPath.leafIndex</code>, yield until the current path matches, then stop. This turns range scans from O(n·cmp) to O(n).</li>
+  <li><strong>Bulk load.</strong> Building from a sorted array bottom-up (fill leaves to ~full, then build branch levels) is O(n) versus O(n log n) repeated inserts, and produces better fill factor. A natural fit for the stated "helper add-on" philosophy if you'd rather keep the core minimal — but it needs internal access, so it belongs here.</li>
+  <li><strong>Optional O(1) count.</strong> A single <code>_count</code> field maintained in <code>internalInsertAt</code>/<code>internalDelete</code> is one add per mutation and would make <code>getCount()</code> free for the no-argument case. The partial-count overload can keep the current walking behavior. Minor memory, large ergonomic win; many users reach for <code>size</code> first.</li>
+</ol>
+<p class="note">Things that look tempting but are probably fine as-is: splice-based array mutation on 64-wide nodes is cache-friendly and fast in V8; <code>instanceof</code> dispatch is already benchmarked (per the comment in nodes.ts); NodeCapacity=64 fixed is a reasonable call.</p>
+
+<h2 id="cleanliness">4. Code cleanliness</h2>
+
+<h3>4.1 Type safety: <code>ITreeNode</code> is an empty interface</h3>
+<p class="loc">nodes.ts:2, casts throughout b-tree.ts</p>
+<p>An empty interface matches <em>everything</em> in TypeScript (<code>const n: ITreeNode = 42</code> compiles), so the many <code>node as LeafNode&lt;TEntry&gt;</code> / <code>as BranchNode&lt;TKey&gt;</code> casts are unchecked. A discriminated union removes every cast for free, because <code>instanceof</code> narrows unions natively:</p>
+<pre><code>export type TreeNode&lt;TKey, TEntry&gt; = LeafNode&lt;TEntry&gt; | BranchNode&lt;TKey, TEntry&gt;;
+
+export class BranchNode&lt;TKey, TEntry&gt; {
+    constructor(
+        public partitions: TKey[],
+        public nodes: TreeNode&lt;TKey, TEntry&gt;[],   // children now typed
+    ) { }
+}</code></pre>
+<p>Then <code>if (node instanceof LeafNode) { node.entries ... } else { node.partitions ... }</code> type-checks with zero casts and zero runtime change. This is the highest-value cleanliness fix in the codebase.</p>
+
+<h3>4.2 Duplicated mirror-image code</h3>
+<ul>
+  <li><code>getFirst</code>/<code>getLast</code> (b-tree.ts:505–530) duplicate <code>moveToFirst</code>/<code>moveToLast</code> (476–502). <code>first()</code> can be: construct a blank path, call <code>moveToFirst(this._root, path)</code>. Two functions deleted, one code path to maintain.</li>
+  <li><code>indexOfEntry</code>/<code>indexOfKey</code> (305–345) are the same binary search differing only in key extraction and the equal-case return. Acceptable duplication for hot-path reasons, but worth a shared comment cross-referencing them so a fix to one isn't forgotten in the other.</li>
+  <li><code>internalNext</code>/<code>internalPrior</code>, <code>findFirst</code>/<code>findLast</code>, <code>rebalanceLeaf</code>/<code>rebalanceBranch</code> are inherent mirror pairs — fine to keep separate for clarity/speed, but note that <code>internalPrior</code> validates the path (line 383) while <code>internalNext</code> does not, and callers like <code>movePrior</code> then validate twice. Pick one convention (validation belongs in the public wrappers, which already do it).</li>
+</ul>
+
+<h3>4.3 Smaller items</h3>
+<ul>
+  <li><code>NodeCapacity &gt;&gt;&gt; 1</code> appears seven times as the underflow threshold; a named <code>const HalfCapacity</code> states intent.</li>
+  <li><code>findFirst</code> guards <code>range.first &amp;&amp; !range.first.inclusive</code> immediately after asserting <code>range.first!</code> — the extra check is dead; same in <code>findLast</code>.</li>
+  <li>Errors are generic <code>Error</code>s. Exported error classes (or at least error codes) let callers distinguish "stale path" from "inconsistent comparator" programmatically.</li>
+  <li><code>index.ts</code> doesn't export <code>nodes.ts</code>, yet the public <code>Path.leafNode</code> is typed as <code>LeafNode</code> — the public surface references a type users can't import from the package root. Either export it or (better, per §5.1) stop exposing it.</li>
+  <li>Missing semicolons at b-tree.ts:267 and 279 (<code>const startPath = this.find(...)</code>) — trivia, but the rest of the file is consistent.</li>
+</ul>
+
+<h2 id="design">5. Design observations</h2>
+
+<h3>5.1 The Path abstraction leaks — and the README already knows it</h3>
+<p>All five <code>Path</code> fields are public and mutable, and correctness depends on users not touching them ("Do not change the properties of this object directly"). The "Help wanted" section lists "Better insulation of path's internals," so this is just a vote plus a concrete shape: export a <code>Path</code> <em>interface</em> exposing only <code>on</code> (readonly) and <code>isEqual</code>/<code>clone</code>, keep the implementation class module-private, and have <code>BTree</code> cast internally. Zero runtime cost, full insulation at the type level, no breaking change for correct code. (Determined users can still cast — this is TypeScript — but the accident becomes impossible.)</p>
+
+<h3>5.2 Ergonomics of the cursor-only API</h3>
+<p>Every read goes path-first: <code>tree.at(tree.next(tree.find(k)))</code>, <code>for (const p of tree.ascending(tree.first())) use(tree.at(p))</code>. The cursor model is the right foundation — it's what makes find-nearest and range scans composable — but the everyday operations deserve direct forms:</p>
+<ul>
+  <li><code>ascending()</code>/<code>descending()</code> with no argument (defaulting to <code>first()</code>/<code>last()</code>);</li>
+  <li><code>entries(range?)</code> yielding <code>TEntry</code> directly and <code>[Symbol.iterator]</code> so <code>for (const e of tree)</code> works — this also neutralizes the aliasing trap of §2.1;</li>
+  <li><code>clear()</code> — currently the only way to empty a tree is to delete every entry or discard it.</li>
+</ul>
+<p>These are thin wrappers, not scope creep, and they'd let the README examples shrink.</p>
+
+<h3>5.3 Versioning model is coarse but honest</h3>
+<p>A single global <code>_version</code> invalidates every outstanding path on any mutation, even when structurally unnecessary (an in-place <code>upsert</code> of an existing key moves nothing). That's a defensible trade — precise invalidation would cost bookkeeping on the hot path — but two consequences are worth documenting: iterators cannot survive any mutation, including updates that don't move entries; and the delete-while-iterating pattern requires a re-<code>find</code> per deletion, making it O(n log n) (§2.5 would fix this). Note also that <code>_version</code> is an unbounded counter incremented per mutation; at ~9×10<sup>15</sup> mutations doubles lose integer precision. Not a practical concern in-memory, but a one-line comment (or wrapping) costs nothing.</p>
+
+<h3>5.4 What the design gets right</h3>
+<p>Worth stating so the criticism above has proportion: storing data only in leaves with an open path structure instead of leaf links is well-reasoned for a single-threaded in-memory tree (the README's justification is correct); the split algorithm's <code>indexDelta</code> propagation keeping the insertion path valid through cascading splits is elegant; freezing entries by default is the right default for a structure whose integrity depends on key immutability; and the decision to keep <code>NodeCapacity</code> fixed rather than configurable is a good simplicity/performance call. The test suite is stronger than typical for a project this size (branch-rebalance, delete-integrity, path-invalidation, and invariants suites all exist).</p>
+
+<h2 id="testing">6. Testing recommendations</h2>
+<ul>
+  <li><strong>Randomized oracle test.</strong> The single most valuable addition: run 10⁵–10⁶ random operations (insert/delete/updateAt/upsert/merge/find/range with random keys) mirrored against a sorted array, comparing results after every operation, with several seeds. This class of test finds bug 1.1 in seconds — <code>find</code> of a random absent key followed by <code>next</code> disagrees with the oracle as soon as a leaf boundary is hit — and permanently guards the rebalancing logic, which is exactly where the previously-fixed partition-corruption bug (comment at b-tree.ts:676) lived.</li>
+  <li><strong>Structural invariant checker.</strong> A test-only <code>checkInvariants(tree)</code> walking the tree asserting: all leaves at equal depth; every non-root node ≥ half full; <code>partitions.length === nodes.length - 1</code> in every branch; every partition equals the minimum key of its right subtree; entries strictly ordered by the comparator. Call it inside the oracle test after every mutation. This makes redundancies like §1.3 provable and future rebalance edits safe. (invariants.test.ts exists — extending it with the partition-equals-subtree-min check is the key addition.)</li>
+  <li><strong>Crack-position matrix.</strong> Explicit tests for <code>next</code>/<code>prior</code>/<code>range</code> from cracks at: tree start, mid-leaf, leaf boundary (bug 1.1), and tree end — at 1-leaf, 2-level, and 3-level tree sizes.</li>
+  <li><strong>The benchmark suite from "Help wanted".</strong> Before optimizing anything in §3, a small benchmark harness (bulk ascending insert, random insert, random find, range scan, mixed churn — with number and string keys) makes the comparator-double-call and freeze costs measurable rather than argued. <a href="https://github.com/tinylibs/tinybench">tinybench</a> is a zero-dep fit for the project's philosophy.</li>
+</ul>
+
+<hr>
+
+<h2 id="appendix">Appendix: verification probes</h2>
+<p class="note">Run against <code>dist/index.js</code> (v1.4.9 build), Node on Windows, 2026-07-06. Probe source available on request; each probe is ~10 lines using only the public API.</p>
+<pre><code>P1 end-of-leaf crack: crack.on = false | next.on = false | next value = undefined (expected 320)
+P1 control mid-leaf crack: next.on = true | value = 20 (expected 20)
+P2 range(315..345): [] (expected [320,330,340])
+P3 collected paths distinct? false | values via at: [undefined, undefined, undefined]
+P4 comparator invocations for one find in 1000-entry tree: 19
+P5 failed insert: on = false | caller object frozen = true
+P6 prior from end-of-leaf crack: on = true | value = 310 (expected 310)
+P7 count after churn: 2500 (expected 2500)
+P7 ordered = true | iterated = 2500</code></pre>
+
+<p class="note">Note: <code>docs/</code> is typedoc output (<code>yarn doc</code> regenerates it); this file may be deleted on the next docs build. Consider moving it outside <code>docs/</code> or adding it to typedoc's preserved files if it should persist.</p>
+
+</main>
+</body>
+</html>
