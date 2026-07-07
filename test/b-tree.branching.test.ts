@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import { KeyBound, KeyRange, NodeCapacity, BTree } from '../src/index.js';
 import { BranchNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 import { lcg, shuffle } from './helpers/rng.js';
 
 describe('Branching BTree', () => {
@@ -58,8 +59,8 @@ describe('Branching BTree', () => {
 		tree.deleteAt(tree.find(gap + halfCap - 1));	// Remove again from tail of leaf 1 - drops below half capacity and should borrow from leaf 0
 		expectRange(0, halfCap + 1);
 		expectRange(gap, halfCap - 1);
-		expect(tree.find(halfCap - 1).branches[0].index).to.equal(0);
-		expect(tree.find(halfCap).branches[0].index).to.equal(1);	// previous insert should now be on leaf 1
+		expect(asImpl(tree.find(halfCap - 1)).branches[0].index).to.equal(0);
+		expect(asImpl(tree.find(halfCap)).branches[0].index).to.equal(1);	// previous insert should now be on leaf 1
 	});
 
 	it('should borrow left', () => {
@@ -70,8 +71,8 @@ describe('Branching BTree', () => {
 		tree.deleteAt(tree.find(halfCap - 1));	// Remove from tail of leaf 0
 		expectRange(0, halfCap - 1);
 		expectRange(gap, halfCap + 1);
-		expect(tree.find(gap).branches[0].index).to.equal(0);	// head of leaf 1 should now be tail of leaf 0
-		expect(tree.find(gap + 1).branches[0].index).to.equal(1);
+		expect(asImpl(tree.find(gap)).branches[0].index).to.equal(0);	// head of leaf 1 should now be tail of leaf 0
+		expect(asImpl(tree.find(gap + 1)).branches[0].index).to.equal(1);
 	});
 
 	it('should merge right', () => {
@@ -127,7 +128,7 @@ describe('Branching BTree', () => {
 		expect(tree.find(50).on).to.be.true;
 
 		// Find the middle entry - it should be at leafIndex 0 with branch index 1
-		const path = tree.find(50);
+		const path = asImpl(tree.find(50));
 		expect(path.leafIndex).to.equal(0);
 		expect(path.branches.length).to.equal(1);
 		expect(path.branches[0].index).to.equal(1);	// Middle leaf is at index 1
@@ -240,7 +241,7 @@ describe('Branching BTree', () => {
 		//    (K_TARGET_LEAF_INDEX + 1) == ((C+1)>>>1) because K_TARGET_LEAF_INDEX = ((C+1)>>>1) - 1.
 		//    - Correct R_split.indexDelta (for new root G) should be 1.
 		//    - The old buggy logic would result in R_split.indexDelta = 0.
-		const pathV = tree.insert(V);
+		const pathV = asImpl(tree.insert(V));
 
 		expect(tree.at(pathV)).to.equal(V, "Inserted value should be retrievable via the returned path.");
 
@@ -410,7 +411,7 @@ describe('Branching BTree', () => {
 
 	// Helper function to validate a path to an existing key
 	function validatePathToKey(tree: BTree<number, number>, key: number) {
-		const path = tree.find(key);
+		const path = asImpl(tree.find(key));
 		expect(path.on).to.be.equal(true, `Path for key ${key} should be 'on'.`);
 		expect(tree.at(path)).to.equal(key, `tree.at(path) for key ${key} should return the key.`);
 		expect(path.leafNode.entries[path.leafIndex]).to.equal(key, `Leaf entry for key ${key} is incorrect.`);

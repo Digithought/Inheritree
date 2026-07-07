@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { BTree } from '../src/index.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 
 describe('BTree Path Validation', () => {
 	let tree: BTree<number, number>; // Example using number for both TKey and TEntry for simplicity
@@ -67,7 +68,7 @@ describe('BTree Path Validation', () => {
 		// The key whose successor is the first entry of the *next* leaf (i.e. it is the last entry of its leaf).
 		function firstLeafBoundary(t: BTree<number, number>, n: number) {
 			for (let k = 0; k < n - 1; k++) {
-				if (t.find(k).leafNode !== t.find(k + 1).leafNode) return k;
+				if (asImpl(t.find(k)).leafNode !== asImpl(t.find(k + 1)).leafNode) return k;
 			}
 			return -1;
 		}

@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { BTree, KeyBound, KeyRange, NodeCapacity, Path } from '../src/index.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { asImpl } from './helpers/path-impl.js';
 
 // Coverage for the perf-descent-and-range-end ticket (review §3.3 + §3.4). These are *pure* optimizations:
 //   §3.3 - getPath/getFirst/getLast descend top-down with a push loop instead of bottom-up recursion + unshift,
@@ -73,28 +74,30 @@ function refEdge(node: ITreeNode, last: boolean): RefPath {
 }
 
 function assertSamePath(actual: Path<number, number>, ref: RefPath, label: string) {
-	expect(actual.branches.length, `${label}: branch depth`).to.equal(ref.branches.length);
+	const a = asImpl(actual);
+	expect(a.branches.length, `${label}: branch depth`).to.equal(ref.branches.length);
 	for (let i = 0; i < ref.branches.length; i++) {
-		expect(actual.branches[i].node, `${label}: branch[${i}].node identity`).to.equal(ref.branches[i].node);
-		expect(actual.branches[i].index, `${label}: branch[${i}].index`).to.equal(ref.branches[i].index);
+		expect(a.branches[i].node, `${label}: branch[${i}].node identity`).to.equal(ref.branches[i].node);
+		expect(a.branches[i].index, `${label}: branch[${i}].index`).to.equal(ref.branches[i].index);
 	}
-	expect(actual.leafNode, `${label}: leafNode identity`).to.equal(ref.leaf);
-	expect(actual.leafIndex, `${label}: leafIndex`).to.equal(ref.index);
-	expect(actual.on, `${label}: on`).to.equal(ref.on);
+	expect(a.leafNode, `${label}: leafNode identity`).to.equal(ref.leaf);
+	expect(a.leafIndex, `${label}: leafIndex`).to.equal(ref.index);
+	expect(a.on, `${label}: on`).to.equal(ref.on);
 }
 
 // Independent structural invariant (no reference needed): the branch chain must be a real root->leaf walk in
 // root-first order, i.e. each chosen child leads to the next node and the last leads to the leaf.
 function assertDescentChainConsistent(tree: BTree<number, number>, path: Path<number, number>, label: string) {
+	const p = asImpl(path);
 	const root = (tree as any)['_root'] as ITreeNode;
-	if (path.branches.length > 0) {
-		expect(path.branches[0].node, `${label}: branch[0] is the root`).to.equal(root);
+	if (p.branches.length > 0) {
+		expect(p.branches[0].node, `${label}: branch[0] is the root`).to.equal(root);
 	} else {
 		expect(root instanceof LeafNode, `${label}: no branches -> root is a leaf`).to.be.true;
 	}
-	for (let i = 0; i < path.branches.length; i++) {
-		const b = path.branches[i];
-		const next: ITreeNode = i + 1 < path.branches.length ? path.branches[i + 1].node : path.leafNode;
+	for (let i = 0; i < p.branches.length; i++) {
+		const b = p.branches[i];
+		const next: ITreeNode = i + 1 < p.branches.length ? p.branches[i + 1].node : p.leafNode;
 		expect(b.node.nodes[b.index], `${label}: branch[${i}] child leads to next node`).to.equal(next);
 	}
 }
@@ -267,7 +270,7 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			const tree = buildSeq(10);
 			expect((tree as any)['_root'] instanceof LeafNode, 'single leaf').to.be.true;
 			for (const key of [-1, 0, 4.5, 9, 10]) {
-				const p = tree.find(key);
+				const p = asImpl(tree.find(key));
 				expect(p.branches.length, `find(${key}) has no branches`).to.equal(0);
 				assertSamePath(p, refFind((tree as any)['_root'], key), `find(${key})`);
 			}
@@ -277,7 +280,8 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 
 		it('empty tree: first/last/find are well-formed off paths with empty branches', () => {
 			const tree = new BTree<number, number>();
-			for (const p of [tree.first(), tree.last(), tree.find(5)]) {
+			for (const raw of [tree.first(), tree.last(), tree.find(5)]) {
+				const p = asImpl(raw);
 				expect(p.branches.length).to.equal(0);
 				expect(p.on).to.be.false;
 				expect(p.leafNode instanceof LeafNode).to.be.true;
@@ -305,7 +309,7 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			const tree = buildSeq(count);
 			const root = (tree as any)['_root'];
 			expect(root instanceof BranchNode && root.nodes[0] instanceof BranchNode, 'genuinely 3-level').to.be.true;
-			expect(tree.find(2048).branches.length, 'target sits deep').to.be.greaterThanOrEqual(2);
+			expect(asImpl(tree.find(2048)).branches.length, 'target sits deep').to.be.greaterThanOrEqual(2);
 			for (const key of [-1, 0, 1, 63, 64, 65, 2048, 2048.5, count - 1, count]) {
 				const p = tree.find(key);
 				assertSamePath(p, refFind(root, key), `find(${key})`);

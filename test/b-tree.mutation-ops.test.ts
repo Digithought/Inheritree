@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import { BTree, NodeCapacity, PathNotOnEntryError } from '../src/index.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 
 // Multi-level (>= 2-level, > NodeCapacity entries) coverage for the three mutation entry points that the
@@ -80,7 +81,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			expect(tree.at(tree.next(result)), 'next() off the crack lands on the new entry').to.equal(NEW);
 			assertTreeInvariants(tree);
 			expect(root.nodes.length, 'the leaf split added one child to the root branch').to.equal(5);
-			expect(tree.find(NEW).branches.length, 'height unchanged (still 2-level)').to.equal(1);
+			expect(asImpl(tree.find(NEW)).branches.length, 'height unchanged (still 2-level)').to.equal(1);
 			expect(tree.get(NEW)).to.equal(NEW);
 			expect(ascendingValues(tree)).to.deep.equal([...before, NEW].sort((a, b) => a - b));
 		});
@@ -110,7 +111,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			assertTreeInvariants(dict);
 
 			const target = 150;
-			expect(dict.find(target).branches.length, 'target sits below a branch (multi-level)').to.be.greaterThan(0);
+			expect(asImpl(dict.find(target)).branches.length, 'target sits below a branch (multi-level)').to.be.greaterThan(0);
 			const beforeShape = shapeOf(dict);
 			const rootBefore = (dict as any)['_root'];
 
@@ -153,7 +154,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			assertTreeInvariants(dict);
 
 			const target = 120;
-			expect(dict.find(target).branches.length).to.be.greaterThan(0);
+			expect(asImpl(dict.find(target)).branches.length).to.be.greaterThan(0);
 			const beforeShape = shapeOf(dict);
 
 			// newEntry is ignored because the key is present; getUpdated keeps the same id (so it is a value-only
@@ -218,7 +219,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			assertTreeInvariants(dict);
 
 			const target = 2500;
-			expect(dict.find(target).branches.length, 'genuinely deep (>= 3 levels)').to.be.greaterThanOrEqual(2);
+			expect(asImpl(dict.find(target)).branches.length, 'genuinely deep (>= 3 levels)').to.be.greaterThanOrEqual(2);
 			const beforeShape = shapeOf(dict);
 			const rootBefore = (dict as any)['_root'];
 
@@ -330,7 +331,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 				shadow.set(id, `i${id}`);
 			}
 			assertTreeInvariants(dict);
-			expect(dict.find(2048).branches.length, '>= 3 levels deep').to.be.greaterThanOrEqual(2);
+			expect(asImpl(dict.find(2048)).branches.length, '>= 3 levels deep').to.be.greaterThanOrEqual(2);
 
 			// Phase 2: mixed op stream, sampling full set-equality + structural invariants periodically.
 			const OPS = 6000;

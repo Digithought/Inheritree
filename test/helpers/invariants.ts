@@ -1,5 +1,6 @@
 import { BranchNode, ITreeNode, LeafNode } from '../../src/nodes.js';
 import { BTree, NodeCapacity } from '../../src/index.js';
+import { asImpl } from './path-impl.js';
 
 /** Options controlling {@link assertTreeInvariants}. */
 export interface InvariantOptions {
@@ -165,11 +166,13 @@ export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, op
 	// path object, so the key must be read inside the loop (never spread into an array).
 	const ascKeys: TKey[] = [];
 	for (const p of tree.ascending(tree.first())) {
-		ascKeys.push(keyFromEntry(p.leafNode.entries[p.leafIndex]));
+		const impl = asImpl(p);
+		ascKeys.push(keyFromEntry(impl.leafNode.entries[impl.leafIndex]));
 	}
 	const descKeys: TKey[] = [];
 	for (const p of tree.descending(tree.last())) {
-		descKeys.push(keyFromEntry(p.leafNode.entries[p.leafIndex]));
+		const impl = asImpl(p);
+		descKeys.push(keyFromEntry(impl.leafNode.entries[impl.leafIndex]));
 	}
 
 	// Rule 6: ascending() === in-order key list

@@ -18,11 +18,13 @@ Features:
 * **Light weight** - very little memory used, only important primitives
 * **CRUD**: `insert`, `updateAt`, `deleteAt`, `find`, `first`, `last`
 * **Upsert and Merge** for efficient hybrid mutation
-* **Enumerations** using `ascending` and `descending` from optional starting point
+* **Entry iteration** using `entries` and `keys`, or `for (const entry of tree)` / `[...tree]` — the safe default for reading (yields distinct values, no cursor aliasing)
+* **Enumerations** using `ascending` and `descending` (from an optional starting path; no argument walks the whole tree)
 * **Ranges** using `range`, ascending or descending, with optional inclusive/exclusive end-points
 * **Path** navigation through `next` and `prior` or `moveNext` and `movePrior`
 * **Find nearest**, using `next` on an unsuccessful path
 * **Count** using `getCount`, computed by summing leaf entries
+* **Clear** using `clear` to empty the tree in place (invalidates outstanding paths; reusable afterward)
 
 WARNING: by default this library freezes added entries to reduce the chance that keys are externally mutated, but this is not done transitively, so it is possible that an object's key can be mutated after adding, resulting in tree corruption.  Don't attempt to change a key value after it has been inserted.  Use updateAt, upsert, insdate, or deleteAt/insert to change the key value.
 
@@ -52,9 +54,10 @@ Via pnpm/yarn:
   ...
   const tree = new BTree<number, number>();
   tree.insert(3); tree.insert(1); tree.insert(2);
-  for (let path of tree.ascending(tree.first())) {
-    console.log(tree.at(path));
+  for (const entry of tree) {       // the safe default: yields entries directly
+    console.log(entry);             // 1, 2, 3
   }
+  console.log([...tree.entries()]); // [1, 2, 3]
   const path = tree.find(1.5);  // result in "crack" between values
   console.log(path.on); // false (not on entry)
   console.log(tree.at(tree.next(path))); // 2
@@ -70,9 +73,10 @@ Via pnpm/yarn:
   tree.insert({ id: 3, shape: "square" });
   tree.insert({ id: 1, shape: "circle" });
   tree.insert({ id: 2, shape: "square" });
-  for (let path of tree.ascending(tree.first())) {
-    console.log(tree.at(path));
+  for (const widget of tree.entries()) {  // entries in ascending key order
+    console.log(widget);
   }
+  console.log([...tree.keys()]);  // [1, 2, 3]
   console.log(tree.get(2));  // Equivalent to find then at
 ```
 
@@ -80,7 +84,9 @@ Via pnpm/yarn:
 
 #### Paths
 
-Many methods take and return Path objects.  All paths not returned from a mutation operation itself are invalid after mutation and any attempt to use them will throw an exception.  `moveNext` and `movePrior` mutate the path they are given, and `deleteAt` mutates the path passed to it (leaving it valid - see below).
+Many methods take and return Path objects.  A `Path` is an insulated cursor: it exposes `on` (is it sitting on an entry?), `isEqual`, and `clone`, and nothing else — its internal position (leaf, index, branches, version) is deliberately hidden so it can't be corrupted by accident.  All paths not returned from a mutation operation itself are invalid after mutation and any attempt to use them will throw an exception.  `moveNext` and `movePrior` mutate the path they are given, and `deleteAt` mutates the path passed to it (leaving it valid - see below).
+
+The raw `ascending`/`descending` iterators yield **one live cursor, reused and mutated in place** at every step — they are a cursor-level tool, not a collection.  Spreading them (`[...tree.ascending()]`) or `.map`ping them gives you N references to the same path parked off the end, so reading them afterward is all-`undefined`; read `tree.at(path)` *inside* the loop, and `path.clone()` any cursor you need to keep.  When you just want the values, prefer `entries()` / `keys()` (or `for (const e of tree)`), which yield distinct entries/keys and sidestep the aliasing entirely.
 
 ```ts
   tree.updateAt(tree.last().prior(), 7);  // this is fine
@@ -140,7 +146,6 @@ Bug fixes, architectural enhancements, and speed improvement suggestions are wel
 #### Help wanted
 
 * Benchmark suite
-* Better insulation of path's internals
 * More tests
 * AssemblyScript portability?
 

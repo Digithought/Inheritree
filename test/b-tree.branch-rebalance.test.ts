@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/index.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 import { lcg, shuffle } from './helpers/rng.js';
 
 // Deterministic coverage of the BRANCH-level rebalance paths in rebalanceBranch (src/b-tree.ts):
@@ -92,7 +93,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 	// the expected child node, all the way to the root. This is the targeted check for the path-index
 	// adjustments inside rebalanceBranch (e.g. the `pathBranch.index += 1` on borrow-from-left).
 	const expectPathLinkage = (key: number) => {
-		const path = tree.find(key);
+		const path = asImpl(tree.find(key));
 		expect(path.on, `find(${key}).on`).to.be.true;
 		expect(tree.at(path), `at(find(${key}))`).to.equal(key);
 		let child: ITreeNode = path.leafNode;
@@ -135,7 +136,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		expect(root.nodes.length).to.equal(2);
 		expect(Bmid.nodes.length).to.equal(MIN);	// 31 -> 32 (absorbed a child from the right)
 		expect(Bright.nodes.length).to.equal(MIN);	// 33 -> 32 (donated its first child)
-		expect(tree.find(0).branches.length).to.equal(2);	// height unchanged (3-level tree)
+		expect(asImpl(tree.find(0)).branches.length).to.equal(2);	// height unchanged (3-level tree)
 		expectSurvivors(total, d);
 		for (const k of [0, total - 1, d - 1, d + 1, minKey(Bright)]) expectPathLinkage(k);
 	});
@@ -157,7 +158,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		expect(root.nodes.length).to.equal(2);
 		expect(Bleft.nodes.length).to.equal(MIN);	// 33 -> 32 (donated its last child)
 		expect(Bmid.nodes.length).to.equal(MIN);	// 31 -> 32 (absorbed a child onto the front)
-		expect(tree.find(0).branches.length).to.equal(2);
+		expect(asImpl(tree.find(0)).branches.length).to.equal(2);
 		expectSurvivors(total, d);
 		for (const k of [0, total - 1, d - 1, d + 1, minKey(Bmid)]) expectPathLinkage(k);
 	});
@@ -180,7 +181,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		expect(root.nodes.length).to.equal(2);	// Bright removed
 		expect(root.nodes[1]).to.equal(Bmid);	// Bmid is the surviving (absorbing) sibling
 		expect(Bmid.nodes.length).to.equal(2 * MIN - 1);	// 31 + 32 = 63
-		expect(tree.find(0).branches.length).to.equal(2);
+		expect(asImpl(tree.find(0)).branches.length).to.equal(2);
 		expectSurvivors(total, d);
 		for (const k of [0, total - 1, d - 1, d + 1]) expectPathLinkage(k);
 	});
@@ -204,7 +205,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		expect(root.nodes.length).to.equal(2);	// Bmid removed
 		expect(root.nodes[1]).to.equal(Bleft);	// Bleft is the surviving (absorbing) sibling
 		expect(Bleft.nodes.length).to.equal(2 * MIN - 1);	// 32 + 31 = 63
-		expect(tree.find(total - 1).branches.length).to.equal(2);
+		expect(asImpl(tree.find(total - 1)).branches.length).to.equal(2);
 		expectSurvivors(total, d);
 		for (const k of [0, total - 1, d - 1, d + 1]) expectPathLinkage(k);
 	});
@@ -219,14 +220,14 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		(tree as any)['_root'] = root;
 		const total = cur.next;
 		assertTreeInvariants(tree);
-		expect(tree.find(0).branches.length).to.equal(2);	// 3-level tree before the delete
+		expect(asImpl(tree.find(0)).branches.length).to.equal(2);	// 3-level tree before the delete
 
 		const d = deleteToUnderflow(Bb);
 
 		assertTreeInvariants(tree);
 		expect((tree as any)['_root']).to.equal(Ba);	// the former child is the new root
 		expect(Ba.nodes.length).to.equal(2 * MIN - 1);	// 32 + 31 = 63 leaves
-		expect(tree.find(0).branches.length).to.equal(1);	// height dropped by one
+		expect(asImpl(tree.find(0)).branches.length).to.equal(1);	// height dropped by one
 		expectSurvivors(total, d);
 		for (const k of [0, total - 1, d - 1, d + 1]) expectPathLinkage(k);
 	});
@@ -244,7 +245,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		(tree as any)['_root'] = root;
 		const total = cur.next;	// 3 * 32^3 = 98304
 		assertTreeInvariants(tree);
-		expect(tree.find(0).branches.length).to.equal(3);	// 4-level tree
+		expect(asImpl(tree.find(0)).branches.length).to.equal(3);	// 4-level tree
 
 		// Target a leaf inside B1's last level-2 branch so both the level-2 and level-1 merges go leftward.
 		const B2 = B1.nodes[B1.nodes.length - 1] as BranchNode<number>;
@@ -254,7 +255,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		expect(root.nodes.length).to.equal(2);	// B1 merged away; root did not collapse
 		expect(root.nodes[1]).to.equal(B1left);
 		expect(B1left.nodes.length).to.equal(2 * MIN - 1);	// 32 + 31 = 63 level-2 children
-		expect(tree.find(0).branches.length).to.equal(3);	// height maintained at 4 levels
+		expect(asImpl(tree.find(0)).branches.length).to.equal(3);	// height maintained at 4 levels
 
 		// The survivor set here is ~98k keys; rely on assertTreeInvariants (which already verifies strict
 		// order, bidirectional agreement and count) plus exact-removal spot checks rather than a full
@@ -271,7 +272,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const N = 6000;	// > C*C (4096) guarantees at least 3 levels
 		for (const k of shuffle([...Array(N).keys()], rng)) tree.insert(k);
 		assertTreeInvariants(tree);
-		expect(tree.find(0).branches.length).to.be.greaterThanOrEqual(2);	// >= 3 levels deep
+		expect(asImpl(tree.find(0)).branches.length).to.be.greaterThanOrEqual(2);	// >= 3 levels deep
 
 		let ops = 0;
 		const checkEvery = 250;

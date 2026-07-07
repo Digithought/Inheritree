@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { BTree, InconsistentComparatorError, NodeCapacity } from '../src/index.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 
 // Contiguous run [start, start + count).
 const seq = (start: number, count: number): number[] => Array.from({ length: count }, (_, i) => start + i);
@@ -64,7 +65,7 @@ describe('BTreeOptions', () => {
 			const N = C * C + 1;	// > NodeCapacity -> genuinely multi-level (>= 3 levels)
 			for (const id of seq(0, N)) dict.insert({ id, value: `v${id}` });
 
-			expect(dict.find(N >> 1).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
+			expect(asImpl(dict.find(N >> 1)).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
 			assertTreeInvariants(dict);
 			expect(dict.getCount()).to.equal(N);
 			// Spot-check that stored entries really are mutable (not frozen).

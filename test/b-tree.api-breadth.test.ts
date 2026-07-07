@@ -1,7 +1,9 @@
 import { expect } from 'chai';
-import { BTree, NodeCapacity, Path } from '../src/index.js';
+import { BTree, NodeCapacity } from '../src/index.js';
+import { PathImpl } from '../src/path.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
+import { asImpl } from './helpers/path-impl.js';
 import { lcg, shuffle } from './helpers/rng.js';
 
 // Breadth coverage for the keyFromEntry / compare parameterization and a handful of API edges that the
@@ -65,7 +67,7 @@ describe('API breadth: non-numeric keys / custom comparators', () => {
 		for (const s of shuffle(keys, rng)) expect(tree.insert(s).on, `insert ${s}`).to.be.true;
 
 		assertTreeInvariants(tree);
-		expect(tree.find('key-002048').branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
+		expect(asImpl(tree.find('key-002048')).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
 
 		const expected = [...keys].sort(strCompare);
 		expect(ascendingValues(tree)).to.deep.equal(expected);
@@ -83,7 +85,7 @@ describe('API breadth: non-numeric keys / custom comparators', () => {
 		for (const k of shuffle([...Array(DEEP).keys()], rng)) expect(tree.insert(k).on).to.be.true;
 
 		assertTreeInvariants(tree);	// validates partition separation under `desc`, not the default order
-		expect(tree.find(2048).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
+		expect(asImpl(tree.find(2048)).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
 
 		// first()/last() and ascending() follow comparator order, which here is numeric-descending.
 		expect(tree.at(tree.first())).to.equal(DEEP - 1);
@@ -107,7 +109,7 @@ describe('API breadth: non-numeric keys / custom comparators', () => {
 		for (const r of shuffle(rows, rng)) expect(tree.insert(r).on, `insert ${r.seq}`).to.be.true;
 
 		assertTreeInvariants(tree);
-		expect(tree.find({ a: 32, b: 0 }).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
+		expect(asImpl(tree.find({ a: 32, b: 0 })).branches.length, 'genuinely multi-level').to.be.greaterThanOrEqual(2);
 
 		expect(ascendingValues(tree).map(r => r.seq)).to.deep.equal([...Array(DEEP).keys()]);
 		expect(descendingValues(tree).map(r => r.seq)).to.deep.equal([...Array(DEEP).keys()].reverse());
@@ -249,7 +251,7 @@ describe('API breadth: compareKeys consistency guard on a multi-level tree', () 
 
 		assertTreeInvariants(tree);
 		const deep = 2048;
-		expect(tree.find(deep).branches.length, 'target sits deep (multi-level)').to.be.greaterThanOrEqual(2);
+		expect(asImpl(tree.find(deep)).branches.length, 'target sits deep (multi-level)').to.be.greaterThanOrEqual(2);
 		expect(tree.find(deep).on, 'a real key is found fine under the (consistent-for-real-keys) comparator').to.be.true;
 
 		const before = tree.getCount();
@@ -289,20 +291,20 @@ describe('API breadth: Path.isEqual', () => {
 
 	it('is false when any one of leafNode / leafIndex / on / version differs', () => {
 		const tree = build();
-		const p0 = tree.find(0);
+		const p0 = asImpl(tree.find(0));
 		// leafNode differs: key 0 and the last key sit in different leaves.
 		expect(tree.find(0).isEqual(tree.find(C * 2 - 1)), 'different leaf').to.be.false;
 		// leafIndex differs (same leaf): keys 0 and 1 share the first leaf.
-		expect(tree.find(0).leafNode, 'same leaf for 0 and 1').to.equal(tree.find(1).leafNode);
+		expect(asImpl(tree.find(0)).leafNode, 'same leaf for 0 and 1').to.equal(asImpl(tree.find(1)).leafNode);
 		expect(tree.find(0).isEqual(tree.find(1)), 'same leaf, different index').to.be.false;
 		// on differs (same leaf + index): the crack before key 0 sits at leafIndex 0 with on === false.
-		const crack = tree.find(-0.5);
+		const crack = asImpl(tree.find(-0.5));
 		expect(crack.on, 'crack before first key').to.be.false;
 		expect(crack.leafNode, 'crack shares the first leaf').to.equal(p0.leafNode);
 		expect(crack.leafIndex, 'crack at index 0').to.equal(p0.leafIndex);
 		expect(p0.isEqual(crack), 'same leaf+index, different on').to.be.false;
 		// version differs (all else equal): forge a path identical to p0 but with a bumped version.
-		const stale = new Path(p0.branches, p0.leafNode, p0.leafIndex, p0.on, p0.version + 1);
+		const stale = new PathImpl(p0.branches, p0.leafNode, p0.leafIndex, p0.on, p0.version + 1);
 		expect(p0.isEqual(stale), 'same leaf+index+on, different version').to.be.false;
 	});
 });
@@ -319,7 +321,7 @@ describe('API breadth: duplicate-key rejection at scale', () => {
 		assertTreeInvariants(tree);
 
 		const deep = 2048;
-		expect(tree.find(deep).branches.length, 'target sits deep (multi-level)').to.be.greaterThanOrEqual(2);
+		expect(asImpl(tree.find(deep)).branches.length, 'target sits deep (multi-level)').to.be.greaterThanOrEqual(2);
 		const shapeBefore = shapeOf(tree);
 		const rootBefore = (tree as any)['_root'];
 		const countBefore = tree.getCount();

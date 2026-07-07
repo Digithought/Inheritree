@@ -11,11 +11,26 @@ export class PathBranch<TKey> {
 	}
 }
 
-/** Represents a cursor in a BTree.  Invalid once mutation has occurred (unless it is the results of a mutation method).
- * Do not change the properties of this object directly.  Use the methods of the BTree class to manipulate it.
- * @member on - true if the cursor is on an entry, false if it is between entries.
+/** Public, insulated view of a cursor in a BTree.  Exposes only what a consumer can safely touch; the
+ * structural fields (branches / leafNode / leafIndex / version) live on the concrete {@link PathImpl} and
+ * are deliberately kept off this interface so they can't be corrupted by accident.  A path is invalid once
+ * the tree has been mutated (unless it is itself the result of a mutation method) - see {@link BTree.isValid}.
+ * @member on - true if the cursor is on an entry, false if it is between entries ("in a crack").
  */
-export class Path<TKey, TEntry> {
+export interface Path<TKey, TEntry> {
+	/** true if the cursor is on an entry; false if it sits in a "crack" between entries. */
+	readonly on: boolean;
+	/** @returns true if the other path is positioned identically (same leaf, index, on-state and tree version). */
+	isEqual(other: Path<TKey, TEntry>): boolean;
+	/** @returns an independent copy of this path (mutating one does not affect the other). */
+	clone(): Path<TKey, TEntry>;
+}
+
+/** Concrete cursor implementation.  Exported from this module for internal use by BTree (and white-box tests),
+ * but intentionally NOT re-exported on the package's public surface - consumers see only the {@link Path}
+ * interface.  Do not change the properties of this object directly; use the methods of the BTree class.
+ */
+export class PathImpl<TKey, TEntry> implements Path<TKey, TEntry> {
 	constructor(
 			public branches: PathBranch<TKey>[],
 			public leafNode: LeafNode<TEntry>,
@@ -24,14 +39,15 @@ export class Path<TKey, TEntry> {
 			public version: number,
 	) { }
 
-	isEqual(path: Path<TKey, TEntry>) {
+	isEqual(other: Path<TKey, TEntry>): boolean {
+			const path = other as PathImpl<TKey, TEntry>;
 			return this.leafNode === path.leafNode
 					&& this.leafIndex === path.leafIndex
 					&& this.on === path.on
 					&& this.version === path.version;
 	}
 
-	clone() {
-			return new Path(this.branches.map(b => b.clone()), this.leafNode, this.leafIndex, this.on, this.version);
+	clone(): PathImpl<TKey, TEntry> {
+			return new PathImpl(this.branches.map(b => b.clone()), this.leafNode, this.leafIndex, this.on, this.version);
 	}
 }
