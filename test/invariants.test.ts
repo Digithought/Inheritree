@@ -12,7 +12,7 @@ function makeLeaf(start: number, n: number): LeafNode<number> {
 }
 
 /** A valid branch over `numLeaves` leaves, each holding `leafSize` sequential keys, first key `base`. */
-function makeBranchOfLeaves(numLeaves: number, leafSize: number, base: number): BranchNode<number> {
+function makeBranchOfLeaves(numLeaves: number, leafSize: number, base: number): BranchNode<number, number> {
 	const leaves: LeafNode<number>[] = [];
 	for (let i = 0; i < numLeaves; i++) {
 		leaves.push(makeLeaf(base + i * leafSize, leafSize));
@@ -21,7 +21,7 @@ function makeBranchOfLeaves(numLeaves: number, leafSize: number, base: number): 
 	for (let i = 1; i < numLeaves; i++) {
 		partitions.push(base + i * leafSize);	// minimum key of leaves[i]
 	}
-	return new BranchNode<number>(partitions, leaves);
+	return new BranchNode<number, number>(partitions, leaves);
 }
 
 function setRoot(tree: BTree<number, number>, root: object): void {
@@ -64,7 +64,7 @@ describe('assertTreeInvariants (validator self-test)', () => {
 		it('rule 4: partition key not equal to min of right subtree', () => {
 			// This is the shape produced by the (benign) stale-partition path in bug #1: a partition that
 			// is a valid separator (31 < 50 <= 100) but is not the minimum key of the right subtree.
-			const root = new BranchNode<number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
+			const root = new BranchNode<number, number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
 			setRoot(tree, root);
 			expect(() => assertTreeInvariants(tree)).to.not.throw();	// sanity: valid before corruption
 			root.partitions[0] = 50;
@@ -72,13 +72,13 @@ describe('assertTreeInvariants (validator self-test)', () => {
 		});
 
 		it('rule 4: a key in the left subtree is not < its partition', () => {
-			const root = new BranchNode<number>([20], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
+			const root = new BranchNode<number, number>([20], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
 			setRoot(tree, root);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Partition violation \(rule 4\)/);
 		});
 
 		it('rule 2: an underfilled non-root leaf', () => {
-			const root = new BranchNode<number>([100], [makeLeaf(0, MinFill - 1), makeLeaf(100, MinFill)]);
+			const root = new BranchNode<number, number>([100], [makeLeaf(0, MinFill - 1), makeLeaf(100, MinFill)]);
 			setRoot(tree, root);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Fill violation \(rule 2\)/);
 		});
@@ -89,12 +89,12 @@ describe('assertTreeInvariants (validator self-test)', () => {
 		});
 
 		it('rule 2: a root branch with fewer than two children', () => {
-			setRoot(tree, new BranchNode<number>([], [makeLeaf(0, MinFill)]));
+			setRoot(tree, new BranchNode<number, number>([], [makeLeaf(0, MinFill)]));
 			expect(() => assertTreeInvariants(tree)).to.throw(/rule 2/);
 		});
 
 		it('rule 3: partitions length not equal to nodes length - 1', () => {
-			const root = new BranchNode<number>([100, 200], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
+			const root = new BranchNode<number, number>([100, 200], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]);
 			setRoot(tree, root);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Shape violation \(rule 3\)/);
 		});
@@ -107,7 +107,7 @@ describe('assertTreeInvariants (validator self-test)', () => {
 		it('rule 1: leaves at differing depths', () => {
 			const shallow = makeLeaf(0, MinFill);							// depth 1
 			const deep = makeBranchOfLeaves(MinFill, MinFill, 100);		// its leaves are depth 2
-			const root = new BranchNode<number>([100], [shallow, deep]);
+			const root = new BranchNode<number, number>([100], [shallow, deep]);
 			setRoot(tree, root);
 			expect(() => assertTreeInvariants(tree)).to.throw(/Depth violation \(rule 1\)/);
 		});
@@ -115,7 +115,7 @@ describe('assertTreeInvariants (validator self-test)', () => {
 
 	describe('allowUnderfilledRoot option', () => {
 		it('accepts an underfilled root branch by default, rejects it when disabled', () => {
-			setRoot(tree, new BranchNode<number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]));
+			setRoot(tree, new BranchNode<number, number>([100], [makeLeaf(0, MinFill), makeLeaf(100, MinFill)]));
 			expect(() => assertTreeInvariants(tree)).to.not.throw();
 			expect(() => assertTreeInvariants(tree, { allowUnderfilledRoot: false })).to.throw(/rule 2/);
 		});

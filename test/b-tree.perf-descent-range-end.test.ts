@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BTree, KeyBound, KeyRange, NodeCapacity, Path } from '../src/index.js';
-import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { BranchNode, TreeNode, LeafNode } from '../src/nodes.js';
 import { asImpl } from './helpers/path-impl.js';
 
 // Coverage for the perf-descent-and-range-end ticket (review §3.3 + §3.4). These are *pure* optimizations:
@@ -23,7 +23,7 @@ function rangeValues<TKey, TEntry>(tree: BTree<TKey, TEntry>, range: KeyRange<TK
 // ---- Reference recursion: a literal transcription of the *old* getPath/getFirst/getLast (bottom-up unshift). ----
 // Used only to prove the new iterative descent produces identical (node, index) branch chains. Numeric identity
 // keys, so the binary searches below mirror the tree's indexOfKey / indexOfEntry exactly.
-interface RefPath { branches: { node: BranchNode<number>; index: number }[]; leaf: LeafNode<number>; index: number; on: boolean }
+interface RefPath { branches: { node: BranchNode<number, number>; index: number }[]; leaf: LeafNode<number>; index: number; on: boolean }
 
 function refIndexOfEntry(entries: number[], key: number): [boolean, number] {
 	let lo = 0, hi = entries.length - 1;
@@ -49,24 +49,24 @@ function refIndexOfKey(keys: number[], key: number): number {
 	return lo;
 }
 
-function refFind(node: ITreeNode, key: number): RefPath {
+function refFind(node: TreeNode<number, number>, key: number): RefPath {
 	if (node instanceof LeafNode) {
 		const [on, index] = refIndexOfEntry(node.entries, key);
 		return { branches: [], leaf: node, index, on };
 	}
-	const branch = node as BranchNode<number>;
+	const branch = node as BranchNode<number, number>;
 	const index = refIndexOfKey(branch.partitions, key);
 	const sub = refFind(branch.nodes[index], key);
 	sub.branches.unshift({ node: branch, index });	// old shape: prepend on the way back up
 	return sub;
 }
 
-function refEdge(node: ITreeNode, last: boolean): RefPath {
+function refEdge(node: TreeNode<number, number>, last: boolean): RefPath {
 	if (node instanceof LeafNode) {
 		const count = node.entries.length;
 		return { branches: [], leaf: node, index: last ? (count > 0 ? count - 1 : 0) : 0, on: count > 0 };
 	}
-	const branch = node as BranchNode<number>;
+	const branch = node as BranchNode<number, number>;
 	const index = last ? branch.nodes.length - 1 : 0;
 	const sub = refEdge(branch.nodes[index], last);
 	sub.branches.unshift({ node: branch, index });
@@ -89,7 +89,7 @@ function assertSamePath(actual: Path<number, number>, ref: RefPath, label: strin
 // root-first order, i.e. each chosen child leads to the next node and the last leads to the leaf.
 function assertDescentChainConsistent(tree: BTree<number, number>, path: Path<number, number>, label: string) {
 	const p = asImpl(path);
-	const root = (tree as any)['_root'] as ITreeNode;
+	const root = (tree as any)['_root'] as TreeNode<number, number>;
 	if (p.branches.length > 0) {
 		expect(p.branches[0].node, `${label}: branch[0] is the root`).to.equal(root);
 	} else {
@@ -97,7 +97,7 @@ function assertDescentChainConsistent(tree: BTree<number, number>, path: Path<nu
 	}
 	for (let i = 0; i < p.branches.length; i++) {
 		const b = p.branches[i];
-		const next: ITreeNode = i + 1 < p.branches.length ? p.branches[i + 1].node : p.leafNode;
+		const next: TreeNode<number, number> = i + 1 < p.branches.length ? p.branches[i + 1].node : p.leafNode;
 		expect(b.node.nodes[b.index], `${label}: branch[${i}] child leads to next node`).to.equal(next);
 	}
 }

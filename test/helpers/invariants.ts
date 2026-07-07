@@ -1,4 +1,4 @@
-import { BranchNode, ITreeNode, LeafNode } from '../../src/nodes.js';
+import { BranchNode, TreeNode, LeafNode } from '../../src/nodes.js';
 import { BTree, NodeCapacity } from '../../src/index.js';
 import { asImpl } from './path-impl.js';
 
@@ -48,7 +48,7 @@ function describeKey(key: unknown): string {
 export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, opts: InvariantOptions = {}): void {
 	const allowUnderfilledRoot = opts.allowUnderfilledRoot ?? true;
 	const anyTree = tree as any;
-	const root = anyTree['_root'] as ITreeNode | undefined;
+	const root = anyTree['_root'] as TreeNode<TKey, TEntry> | undefined;
 	const compare = anyTree['compare'] as (a: TKey, b: TKey) => number;
 	const keyFromEntry = anyTree['keyFromEntry'] as (entry: TEntry) => TKey;
 
@@ -78,7 +78,7 @@ export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, op
 
 	// Validates the subtree rooted at `node` and returns its [min, max] key, or null for an empty leaf
 	// (only legal at the root of an empty tree).
-	function recurse(node: ITreeNode, depth: number, isRoot: boolean, path: string): { min: TKey, max: TKey } | null {
+	function recurse(node: TreeNode<TKey, TEntry>, depth: number, isRoot: boolean, path: string): { min: TKey, max: TKey } | null {
 		if (node instanceof LeafNode) {
 			leafDepths.add(depth);
 			const entries = node.entries as TEntry[];
@@ -104,7 +104,7 @@ export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, op
 		}
 
 		if (node instanceof BranchNode) {
-			const branch = node as BranchNode<TKey>;
+			const branch = node;
 			// Rule 3: shape
 			if (branch.partitions.length !== branch.nodes.length - 1) {
 				throw new Error(`Shape violation (rule 3) at branch ${path}: partitions.length (${branch.partitions.length}) !== nodes.length - 1 (${branch.nodes.length - 1}).`);

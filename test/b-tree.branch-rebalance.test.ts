@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/index.js';
-import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { BranchNode, TreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
 import { asImpl } from './helpers/path-impl.js';
 import { lcg, shuffle } from './helpers/rng.js';
@@ -33,7 +33,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 	// the survivor set after deleting one key is simply [0..total) minus that key, and partition keys fall
 	// out of the min-key-of-next-child rule automatically.
 
-	const minKey = (node: ITreeNode): number => {
+	const minKey = (node: TreeNode<number, number>): number => {
 		let n: any = node;
 		while (n instanceof BranchNode) n = n.nodes[0];
 		return (n as LeafNode<number>).entries[0];
@@ -41,8 +41,8 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 
 	// Builds a branch whose partitions are the minimum key of each child after the first (the invariant the
 	// tree maintains: partition[i] === min key of nodes[i+1]).
-	const branchOf = (children: ITreeNode[]): BranchNode<number> =>
-		new BranchNode<number>(children.slice(1).map(minKey), children);
+	const branchOf = (children: TreeNode<number, number>[]): BranchNode<number, number> =>
+		new BranchNode<number, number>(children.slice(1).map(minKey), children);
 
 	// `leafCount` leaves of `per` sequential entries each, drawn from the cursor.
 	const leaves = (cur: { next: number }, leafCount: number, per: number): LeafNode<number>[] => {
@@ -56,12 +56,12 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 	};
 
 	// A level-2 branch (children are leaves).
-	const leafBranch = (cur: { next: number }, leafCount: number, per: number): BranchNode<number> =>
+	const leafBranch = (cur: { next: number }, leafCount: number, per: number): BranchNode<number, number> =>
 		branchOf(leaves(cur, leafCount, per));
 
 	// A level-1 branch (children are level-2 leaf-branches).
-	const branchBranch = (cur: { next: number }, l2: number, leafCount: number, per: number): BranchNode<number> => {
-		const kids: BranchNode<number>[] = [];
+	const branchBranch = (cur: { next: number }, l2: number, leafCount: number, per: number): BranchNode<number, number> => {
+		const kids: BranchNode<number, number>[] = [];
 		for (let i = 0; i < l2; i++) kids.push(leafBranch(cur, leafCount, per));
 		return branchOf(kids);
 	};
@@ -96,7 +96,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const path = asImpl(tree.find(key));
 		expect(path.on, `find(${key}).on`).to.be.true;
 		expect(tree.at(path), `at(find(${key}))`).to.equal(key);
-		let child: ITreeNode = path.leafNode;
+		let child: TreeNode<number, number> = path.leafNode;
 		for (let i = path.branches.length - 1; i >= 0; i--) {
 			const b = path.branches[i];
 			expect(b.index, `branch[${i}].index lower bound`).to.be.greaterThanOrEqual(0);
@@ -110,7 +110,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 	// The leaf at index 1 of a leaf-branch is always non-empty after a single delete and never at branch
 	// index 0, so deleting its last entry drives the branch to underflow without tripping the leafIndex===0
 	// partition-update special case in internalDelete. Returns the deleted key.
-	const deleteToUnderflow = (leafBranchNode: BranchNode<number>): number => {
+	const deleteToUnderflow = (leafBranchNode: BranchNode<number, number>): number => {
 		const target = leafBranchNode.nodes[1] as LeafNode<number>;
 		const key = target.entries[target.entries.length - 1];
 		expect(tree.deleteAt(tree.find(key)), `delete ${key}`).to.be.true;
@@ -248,7 +248,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		expect(asImpl(tree.find(0)).branches.length).to.equal(3);	// 4-level tree
 
 		// Target a leaf inside B1's last level-2 branch so both the level-2 and level-1 merges go leftward.
-		const B2 = B1.nodes[B1.nodes.length - 1] as BranchNode<number>;
+		const B2 = B1.nodes[B1.nodes.length - 1] as BranchNode<number, number>;
 		const d = deleteToUnderflow(B2);
 
 		assertTreeInvariants(tree);

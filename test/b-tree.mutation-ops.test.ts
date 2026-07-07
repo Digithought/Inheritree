@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity, PathNotOnEntryError } from '../src/index.js';
-import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { BranchNode, TreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
 import { asImpl } from './helpers/path-impl.js';
 import { lcg, lcgInt, shuffle } from './helpers/rng.js';
@@ -29,15 +29,15 @@ const MIN = C >>> 1;	// 32 = minimum fill for a non-root leaf
 // --- construction / inspection helpers ---------------------------------------------------------------
 
 // Minimum key reachable from a node (descend leftmost), used to derive branch partitions.
-const minKey = (node: ITreeNode): number => {
+const minKey = (node: TreeNode<number, number>): number => {
 	let n: any = node;
 	while (n instanceof BranchNode) n = n.nodes[0];
 	return (n as LeafNode<number>).entries[0];
 };
 
 // A branch whose partitions follow the tree's invariant: partition[i] === min key of nodes[i+1].
-const branchOf = (children: ITreeNode[]): BranchNode<number> =>
-	new BranchNode<number>(children.slice(1).map(minKey), children);
+const branchOf = (children: TreeNode<number, number>[]): BranchNode<number, number> =>
+	new BranchNode<number, number>(children.slice(1).map(minKey), children);
 
 const leafOf = (entries: number[]): LeafNode<number> => new LeafNode(entries);
 
@@ -54,9 +54,9 @@ const ascendingValues = <T>(tree: BTree<any, T>): T[] => {
 
 // A shape fingerprint (partition keys + leaf fill counts, recursively) - deep-equal before/after a
 // value-only op proves no split/rebalance/rebuild occurred.
-const structureOf = (node: ITreeNode): any => {
+const structureOf = (node: TreeNode<unknown, unknown>): any => {
 	if (node instanceof LeafNode) return ['leaf', node.entries.length];
-	const b = node as BranchNode<unknown>;
+	const b = node as BranchNode<unknown, unknown>;
 	return ['branch', [...b.partitions], b.nodes.map(structureOf)];
 };
 const shapeOf = (tree: BTree<any, any>) => structureOf((tree as any)['_root']);

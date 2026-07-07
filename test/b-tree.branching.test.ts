@@ -120,7 +120,7 @@ describe('Branching BTree', () => {
 		const leftLeaf = new LeafNode([...Array(halfCap).keys()]);	// [0..31]
 		const middleLeaf = new LeafNode([50]);	// Single entry - will be deleted
 		const rightLeaf = new LeafNode([...Array(halfCap).keys()].map(i => i + 100));	// [100..131]
-		const rootBranch = new BranchNode<number>([50, 100], [leftLeaf, middleLeaf, rightLeaf]);
+		const rootBranch = new BranchNode<number, number>([50, 100], [leftLeaf, middleLeaf, rightLeaf]);
 		(tree as any)['_root'] = rootBranch;
 
 		// Verify setup
@@ -416,7 +416,7 @@ describe('Branching BTree', () => {
 		expect(tree.at(path)).to.equal(key, `tree.at(path) for key ${key} should return the key.`);
 		expect(path.leafNode.entries[path.leafIndex]).to.equal(key, `Leaf entry for key ${key} is incorrect.`);
 
-		let currentExpectedChildNode: any = path.leafNode; // Use 'any' if ITreeNode is not easily importable here
+		let currentExpectedChildNode: any = path.leafNode; // Use 'any' if TreeNode is not easily importable here
 		for (let i = path.branches.length - 1; i >= 0; i--) {
 			const b = path.branches[i];
 			expect(b.index).to.be.greaterThanOrEqual(0, `Branch index for key ${key} at branch level ${i} is out of bounds (negative).`);

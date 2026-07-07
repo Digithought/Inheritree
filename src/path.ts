@@ -1,8 +1,8 @@
 import { BranchNode, LeafNode } from "./nodes.js";
 
-export class PathBranch<TKey> {
+export class PathBranch<TKey, TEntry> {
 	constructor (
-			public node: BranchNode<TKey>,
+			public node: BranchNode<TKey, TEntry>,
 			public index: number,
 	) {}
 
@@ -32,7 +32,7 @@ export interface Path<TKey, TEntry> {
  */
 export class PathImpl<TKey, TEntry> implements Path<TKey, TEntry> {
 	constructor(
-			public branches: PathBranch<TKey>[],
+			public branches: PathBranch<TKey, TEntry>[],
 			public leafNode: LeafNode<TEntry>,
 			public leafIndex: number,
 			public on: boolean,

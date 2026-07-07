@@ -1,5 +1,5 @@
 import { KeyRange } from "./key-range.js";
-import { BranchNode, ITreeNode, LeafNode } from "./nodes.js";
+import { BranchNode, TreeNode, LeafNode } from "./nodes.js";
 import { Path, PathImpl, PathBranch } from "./path.js";
 
 /** Node capacity.  Not configurable - not worth the runtime memory, when almost nobody will touch this */
@@ -41,7 +41,7 @@ export interface BTreeOptions {
  * @template TKey The type of keys used for indexing the entries.  This might be an element of TEntry, or TEntry itself.
  */
 export class BTree<TKey, TEntry> {
-	private _root: ITreeNode;
+	private _root: TreeNode<TKey, TEntry>;
 	/** Coarse, tree-wide mutation counter.  Every mutation ({@link insert}, {@link updateAt}, {@link upsert},
 	 * {@link merge}, {@link deleteAt}, {@link clear}) bumps this, and a path is valid only while its stamped
 	 * version still matches (see {@link isValid}).  Consequences of the coarseness, documented honestly:
@@ -432,18 +432,18 @@ export class BTree<TKey, TEntry> {
 	}
 
 
-	private getPath(node: ITreeNode, key: TKey): PathImpl<TKey, TEntry> {
+	private getPath(node: TreeNode<TKey, TEntry>, key: TKey): PathImpl<TKey, TEntry> {
 		// Descend top-down, pushing each branch in root->leaf order (already the order Path.branches wants),
 		// so no unshift/reversal is needed and building an N-level path costs O(depth), not O(depth^2).
-		const branches: PathBranch<TKey>[] = [];
+		const branches: PathBranch<TKey, TEntry>[] = [];
 		let current = node;
 		while (!(current instanceof LeafNode)) {
-			const branch = current as BranchNode<TKey>;
+			const branch = current;
 			const index = this.indexOfKey(branch.partitions, key);
 			branches.push(new PathBranch(branch, index));
 			current = branch.nodes[index];
 		}
-		const leaf = current as LeafNode<TEntry>;
+		const leaf = current;
 		const [on, index] = this.indexOfEntry(leaf.entries, key);
 		return new PathImpl<TKey, TEntry>(branches, leaf, index, on, this._version);
 	}
@@ -619,42 +619,42 @@ export class BTree<TKey, TEntry> {
 			--branchIndex;
 		}
 		if (split) {
-			const newBranch = new BranchNode<TKey>([split.key], [this._root, split.right]);
+			const newBranch = new BranchNode([split.key], [this._root, split.right]);
 			this._root = newBranch;
 			path.branches.unshift(new PathBranch(newBranch, split.indexDelta));
 		}
 	}
 
 	/** Starting from the given node, recursively working down to the leaf, build onto the path based on the beginning-most entry. */
-	private moveToFirst(node: ITreeNode, path: PathImpl<TKey, TEntry>) {
+	private moveToFirst(node: TreeNode<TKey, TEntry>, path: PathImpl<TKey, TEntry>) {
 		if (node instanceof LeafNode) {
-			const leaf = node as LeafNode<TEntry>;
+			const leaf = node;
 			path.leafNode = leaf;
 			path.leafIndex = 0;
 			path.on = leaf.entries.length > 0;
 		} else {
-			path.branches.push(new PathBranch(node as BranchNode<TKey>, 0));
-			this.moveToFirst((node as BranchNode<TKey>).nodes[0], path);
+			path.branches.push(new PathBranch(node, 0));
+			this.moveToFirst(node.nodes[0], path);
 		}
 	}
 
 	/** Starting from the given node, recursively working down to the leaf, build onto the path based on the end-most entry. */
-	private moveToLast(node: ITreeNode, path: PathImpl<TKey, TEntry>) {
+	private moveToLast(node: TreeNode<TKey, TEntry>, path: PathImpl<TKey, TEntry>) {
 		if (node instanceof LeafNode) {
-			const leaf = node as LeafNode<TEntry>;
+			const leaf = node;
 			const count = leaf.entries.length;
 			path.leafNode = leaf;
 			path.on = count > 0;
 			path.leafIndex = count > 0 ? count - 1 : 0;
 		} else {
-			const branch = node as BranchNode<TKey>;
+			const branch = node;
 			const pathBranch = new PathBranch(branch, branch.partitions.length);
 			path.branches.push(pathBranch);
 			this.moveToLast(branch.nodes[pathBranch.index], path);
 		}
 	}
 
-	private leafInsert(path: PathImpl<TKey, TEntry>, entry: TEntry): Split<TKey> | undefined {
+	private leafInsert(path: PathImpl<TKey, TEntry>, entry: TEntry): Split<TKey, TEntry> | undefined {
 		const { leafNode: leaf, leafIndex: index } = path;
 		if (leaf.entries.length < NodeCapacity) {  // No split needed
 			leaf.entries.splice(index, 0, entry);
@@ -677,10 +677,10 @@ export class BTree<TKey, TEntry> {
 			leaf.entries.splice(index, 0, entry);
 		}
 
-		return new Split<TKey>(this.keyFromEntry(moveEntries[0]), newLeaf, delta);
+		return new Split<TKey, TEntry>(this.keyFromEntry(moveEntries[0]), newLeaf, delta);
 	}
 
-	private branchInsert(path: PathImpl<TKey, TEntry>, branchIndex: number, split: Split<TKey>): Split<TKey> | undefined {
+	private branchInsert(path: PathImpl<TKey, TEntry>, branchIndex: number, split: Split<TKey, TEntry>): Split<TKey, TEntry> | undefined {
 		const pathBranch = path.branches[branchIndex];
 		const { index, node } = pathBranch;
 		pathBranch.index += split.indexDelta;
@@ -705,10 +705,10 @@ export class BTree<TKey, TEntry> {
 			pathBranch.node = newBranch;
 		}
 
-		return new Split<TKey>(newPartition, newBranch, delta);
+		return new Split<TKey, TEntry>(newPartition, newBranch, delta);
 	}
 
-	private rebalanceLeaf(path: PathImpl<TKey, TEntry>): ITreeNode | undefined {
+	private rebalanceLeaf(path: PathImpl<TKey, TEntry>): TreeNode<TKey, TEntry> | undefined {
 		if (path.leafNode.entries.length >= HalfCapacity) {
 			return undefined;
 		}
@@ -757,7 +757,7 @@ export class BTree<TKey, TEntry> {
 		}
 	}
 
-	private rebalanceBranch(path: PathImpl<TKey, TEntry>, depth: number): ITreeNode | undefined {
+	private rebalanceBranch(path: PathImpl<TKey, TEntry>, depth: number): TreeNode<TKey, TEntry> | undefined {
 		const pathBranch = path.branches[depth];
 		const branch = pathBranch.node;
 		if (depth === 0 && branch.partitions.length === 0) {  // last node... collapse child into root
@@ -772,7 +772,7 @@ export class BTree<TKey, TEntry> {
 		const pIndex = parent.index;
 		const pNode = parent.node;
 
-		const rightSib = pNode.nodes[pIndex + 1] as BranchNode<TKey> | undefined;
+		const rightSib = pNode.nodes[pIndex + 1] as BranchNode<TKey, TEntry> | undefined;
 		if (rightSib && rightSib.nodes.length > HalfCapacity) {   // Attempt to borrow from right sibling
 			branch.partitions.push(pNode.partitions[pIndex]);
 			const node = rightSib.nodes.shift()!;
@@ -782,7 +782,7 @@ export class BTree<TKey, TEntry> {
 			return undefined;
 		}
 
-		const leftSib = pNode.nodes[pIndex - 1] as BranchNode<TKey> | undefined;
+		const leftSib = pNode.nodes[pIndex - 1] as BranchNode<TKey, TEntry> | undefined;
 		if (leftSib && leftSib.nodes.length > HalfCapacity) {   // Attempt to borrow from left sibling
 			branch.partitions.unshift(pNode.partitions[pIndex - 1]);
 			const node = leftSib.nodes.pop()!;
@@ -833,10 +833,10 @@ export class BTree<TKey, TEntry> {
 	}
 }
 
-class Split<TKey> {
+class Split<TKey, TEntry> {
 	constructor(
 		public key: TKey,
-		public right: ITreeNode,
+		public right: TreeNode<TKey, TEntry>,
 		public indexDelta: number,
 	) { }
 }

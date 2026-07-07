@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/index.js';
 import { PathImpl } from '../src/path.js';
-import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
+import { BranchNode, TreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
 import { asImpl } from './helpers/path-impl.js';
 import { lcg, shuffle } from './helpers/rng.js';
@@ -50,9 +50,9 @@ const descendingValues = <TKey, TEntry>(tree: BTree<TKey, TEntry>): TEntry[] => 
 
 // A shape fingerprint (partition keys + leaf fill counts, recursively); deep-equal before/after an op proves
 // no split / rebalance / rebuild occurred. (Same fingerprint used by test/b-tree.mutation-ops.test.ts.)
-const structureOf = (node: ITreeNode): any => {
+const structureOf = (node: TreeNode<unknown, unknown>): any => {
 	if (node instanceof LeafNode) return ['leaf', node.entries.length];
-	const b = node as BranchNode<unknown>;
+	const b = node as BranchNode<unknown, unknown>;
 	return ['branch', [...b.partitions], b.nodes.map(structureOf)];
 };
 const shapeOf = (tree: BTree<any, any>) => structureOf((tree as any)['_root']);
