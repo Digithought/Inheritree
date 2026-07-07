@@ -320,14 +320,14 @@ export class BTree<TKey, TEntry> {
 	*range(range: KeyRange<TKey>): IterableIterator<Path<TKey, TEntry>> {
 		const startPath = (range.first
 			? this.findFirst(range)
-			: (range.isAscending ? this.first() : this.last())) as PathImpl<TKey, TEntry>;
+			: (range.isAscending !== false ? this.first() : this.last())) as PathImpl<TKey, TEntry>;
 		const endPath = (range.last
 			? this.findLast(range)
-			: (range.isAscending ? this.last() : this.first())) as PathImpl<TKey, TEntry>;
+			: (range.isAscending !== false ? this.last() : this.first())) as PathImpl<TKey, TEntry>;
 		if (!startPath.on || !endPath.on) {
 			return;	// no reachable start or end entry -> empty range
 		}
-		const ascendingFactor = range.isAscending ? 1 : -1;
+		const ascendingFactor = range.isAscending !== false ? 1 : -1;
 		// The end position (endPath) is fixed before iteration, and the scan is strictly sequential, so the
 		// per-element stop test is a (leafNode, leafIndex) match - no user comparator per element. The one case
 		// position alone can't catch is start already past end (an ill-formed range like ascending first > last,
@@ -340,7 +340,7 @@ export class BTree<TKey, TEntry> {
 		}
 		const endLeaf = endPath.leafNode;
 		const endIndex = endPath.leafIndex;
-		const iterable = range.isAscending
+		const iterable = range.isAscending !== false
 			? this.internalAscending(startPath)
 			: this.internalDescending(startPath);
 		for (const path of iterable) {
@@ -618,8 +618,8 @@ export class BTree<TKey, TEntry> {
 
 	private findFirst(range: KeyRange<TKey>): PathImpl<TKey, TEntry> {	// Assumes range.first is defined
 		const startPath = this.find(range.first!.key) as PathImpl<TKey, TEntry>;
-		if (!startPath.on || !range.first!.inclusive) {
-			if (range.isAscending) {
+		if (!startPath.on || range.first!.inclusive === false) {
+			if (range.isAscending !== false) {
 				this.internalNext(startPath);
 			} else {
 				this.internalPrior(startPath);
@@ -630,8 +630,8 @@ export class BTree<TKey, TEntry> {
 
 	private findLast(range: KeyRange<TKey>): PathImpl<TKey, TEntry> {	// Assumes range.last is defined
 		const endPath = this.find(range.last!.key) as PathImpl<TKey, TEntry>;
-		if (!endPath.on || !range.last!.inclusive) {
-			if (range.isAscending) {
+		if (!endPath.on || range.last!.inclusive === false) {
+			if (range.isAscending !== false) {
 				this.internalPrior(endPath);
 			} else {
 				this.internalNext(endPath);

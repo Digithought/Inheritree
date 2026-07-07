@@ -198,7 +198,6 @@ Bug fixes, architectural enhancements, and speed improvement suggestions are wel
 
 TODO: need version checking against base tree; right now, the base is assumed to be immutable while it has live derived children (see the *Base immutability contract* above). A runtime guard — e.g. a version/`hasChildren` check that throws when a base is mutated while derived — would turn that documented contract into an enforced one.
 
-* Benchmark suite
 * More tests
 * AssemblyScript portability?
 
