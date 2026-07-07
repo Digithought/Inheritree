@@ -66,15 +66,15 @@
 
 <h2>Verdict</h2>
 <p>The COW machinery is structurally sound. The ownership model (per-node <code>tree</code> back-pointer, clone-rootward on first write, upward-closed ownership) is coherent, the path-remapping through <code>mutableLeaf</code>/<code>mutableBranch</code>/<code>replaceRootward</code> is careful, and the test suite — particularly <code>assertOwnershipInvariant</code> with base snapshots — encodes the right invariants and exercises the hard rebalance paths. No structural COW-correctness bug was found in this review, and the invariants survived the v1.5.0 merge intact.</p>
-<p>The upstream v1.5.0 merge resolved four of the original fourteen findings outright (freeze-on-success, deleteAt path re-stamp, aliasing-free iteration, O(1) count) and substantially improved a fifth (comparator-check cost). The most significant remaining issue is unchanged and now stands alone at the top: node cloning uses <code>structuredClone</code>, which deep-copies user entries — throwing on entries containing functions, silently stripping class prototypes, breaking entry identity, and producing <em>unfrozen</em> copies. All of that is unique to derived trees and all avoidable. Second tier, also unchanged: the COW plumbing's allocation overhead on plain trees (now measurable with the upstream benchmark suite), and the base-immutability contract still being documented rather than enforced.</p>
+<p>The upstream v1.5.0 merge resolved four of the original fourteen findings outright (freeze-on-success, deleteAt path re-stamp, aliasing-free iteration, O(1) count) and substantially improved a fifth (comparator-check cost). The most significant remaining issue is unchanged and now stands alone at the top: node cloning uses <code>structuredClone</code>, which deep-copies user entries — throwing on entries containing functions, silently stripping class prototypes, breaking entry identity, and producing <em>unfrozen</em> copies. All of that is unique to derived trees and all avoidable. Second tier: F3 and F4 (the COW plumbing's allocation overhead on plain trees, and <code>mutableBranch</code>'s wasted work on an already-owned spine) are now <strong>resolved</strong> by the <code>cow-lazy-mutable-node</code> change — the mutable-node layer is allocation-free unless a clone genuinely occurs (delete-heavy benchmarks +2.5–8.6%, no regression). The base-immutability contract remains documented rather than enforced.</p>
 
 <h2>Findings Summary</h2>
 <table>
   <tr><th>#</th><th>Severity</th><th>Status</th><th>Area</th><th>Finding</th></tr>
   <tr><td>F1</td><td><span class="sev sev-high">High</span></td><td>Open</td><td>Correctness</td><td><code>structuredClone</code> in node clones: DataCloneError, prototype loss, identity break, unfrozen copies</td></tr>
   <tr><td>F2</td><td><span class="sev sev-med">Medium</span></td><td>Open</td><td>Robustness</td><td>Base-immutability contract unenforced; concrete O(1) version-stamp guard proposed (now also protects <code>_count</code>)</td></tr>
-  <tr><td>F3</td><td><span class="sev sev-med">Medium</span></td><td>Open</td><td>Performance</td><td>COW plumbing allocates on every rebalance even for trees with no base (regression vs. Digitree; now quantifiable via <code>bench/</code>)</td></tr>
-  <tr><td>F4</td><td><span class="sev sev-med">Medium</span></td><td>Open</td><td>Performance</td><td><code>mutableBranch</code> allocates a Map and runs remap even when the spine is already owned</td></tr>
+  <tr><td>F3</td><td><span class="sev sev-good">Resolved</span></td><td>cow-lazy-mutable-node</td><td>Performance</td><td>COW plumbing allocates on every rebalance even for trees with no base (regression vs. Digitree; now quantifiable via <code>bench/</code>)</td></tr>
+  <tr><td>F4</td><td><span class="sev sev-good">Resolved</span></td><td>cow-lazy-mutable-node</td><td>Performance</td><td><code>mutableBranch</code> allocates a Map and runs remap even when the spine is already owned</td></tr>
   <tr><td>F5</td><td><span class="sev sev-low">Low</span></td><td>Open</td><td>API consistency</td><td><code>upsert</code> returns <code>on=false</code> for fresh inserts; <code>merge</code> returns <code>on=true</code> (upstream kept this in v1.5.0)</td></tr>
   <tr><td>F6</td><td><span class="sev sev-good">Resolved</span></td><td>Upstream 1.5.0</td><td>API</td><td><code>insert</code> now freezes only after a successful insert; rejected duplicates leave the caller's object untouched</td></tr>
   <tr><td>F7</td><td><span class="sev sev-good">Resolved</span></td><td>Upstream 1.5.0</td><td>Enhancement</td><td><code>deleteAt</code> re-stamps the path version — delete-while-iterating now supported</td></tr>
@@ -144,7 +144,8 @@ private checkBase() {
 </div>
 
 <div class="finding b-med">
-  <h3><span class="sev sev-med">Medium</span> F3 — COW plumbing taxes plain (non-derived) trees <span class="loc">(unchanged by merge; now measurable)</span></h3>
+  <h3><span class="sev sev-good">Resolved</span> F3 — COW plumbing taxes plain (non-derived) trees <span class="loc">(fixed in cow-lazy-mutable-node)</span></h3>
+  <p class="resolved">Resolved: laziness moved into the callee exactly as the fix shape below proposes. <code>mutableLeaf</code>/<code>mutableBranch</code> now take <code>(path, depth[, sib, delta])</code> and build slice/sibling-segment material only after deciding a clone is required; <code>leafSibPath</code> (and its fabricated <code>leafIndex</code>) is deleted. Plain and already-owned trees allocate nothing.</p>
   <p class="loc">src/b-tree.ts — <code>leafSibPath</code>/<code>branchSibSegments</code> call sites in <code>rebalanceLeaf</code>/<code>rebalanceBranch</code>; <code>path.branches.slice(...)</code> at every <code>mutableBranch</code> call site</p>
   <p>Overhead present on every borrow/merge/split even when <code>this.base === undefined</code>:</p>
   <ul>
@@ -157,7 +158,8 @@ private checkBase() {
 </div>
 
 <div class="finding b-med">
-  <h3><span class="sev sev-med">Medium</span> F4 — <code>mutableBranch</code> does wasted work when the spine is already owned <span class="loc">(unchanged by merge)</span></h3>
+  <h3><span class="sev sev-good">Resolved</span> F4 — <code>mutableBranch</code> does wasted work when the spine is already owned <span class="loc">(fixed in cow-lazy-mutable-node)</span></h3>
+  <p class="resolved">Resolved: the ownership fast path below now guards <code>mutableBranch</code> (<code>if (!this.base || branch.tree === this) return branch;</code>), so an already-owned spine allocates no Map and runs no remap. A code comment at the site records the tripwire — the fast path is correct only while ownership stays upward-closed (<code>assertOwnershipInvariant</code> check 1 is the guard).</p>
   <p class="loc">src/b-tree.ts — <code>mutableBranch</code></p>
   <p>For a derived tree that has already cloned its write path (the steady state for any write-heavy child), every subsequent <code>mutableBranch</code> call still allocates a <code>Map</code>, calls <code>replaceRootward</code> (which returns immediately at the first owned segment), then runs <code>mainPath.remap</code> — an O(depth) loop of <code>map.get</code> calls against an empty map. <code>mutableLeaf</code> already has the ownership fast path; <code>mutableBranch</code> is missing its twin:</p>
   <pre><code>const branch = segments.at(-1)!.node;

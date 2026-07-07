@@ -14,8 +14,9 @@ import { lcg, lcgInt, shuffle } from './helpers/rng.js';
  *   1. `replaceRootward` returned without linking the freshly-cloned child into an
  *      already-owned ancestor, orphaning the clone — the owned ancestor kept pointing
  *      at the stale base node.
- *   2. `leafSibPath` failed to shift the cloned sibling path's parent-slot index by the
- *      borrow/merge delta, so the wrong slot was made mutable.
+ *   2. the cloned sibling path failed to shift its parent-slot index by the borrow/merge
+ *      delta, so the wrong slot was made mutable. (That index-shift now lives inlined in
+ *      `mutableLeaf`'s sibling form; the old `leafSibPath` helper was removed.)
  *
  * Either bug drops deletions and/or produces phantom-repeated keys on iteration.
  * Deleting the leftmost leaf only ever borrows/merges with a *right* sibling, which
