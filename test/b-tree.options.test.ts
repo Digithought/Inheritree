@@ -131,6 +131,30 @@ describe('BTreeOptions', () => {
 		});
 	});
 
+	describe('antisymmetry check is sign-based, not identical-value-based', () => {
+		it('throws when both directions return the same sign but different magnitude (broken subtraction shape)', () => {
+			// Same-sign result in both directions (1 and 2) violates antisymmetry even though the values differ.
+			const cmp = (a: number, b: number) => a < b ? 1 : a > b ? 2 : 0;
+			const tree = new BTree<number, number>(undefined, cmp);
+			tree.insert(1);	// empty leaf: no comparison yet
+			expect(() => tree.insert(2)).to.throw(InconsistentComparatorError);
+		});
+
+		it('throws on zero-asymmetry: one direction nonzero, the reverse direction zero', () => {
+			// Never returns negative: compare(1,2) === 1 but compare(2,1) === 0 instead of -1.
+			const cmp = (a: number, b: number) => a < b ? 1 : 0;
+			const tree = new BTree<number, number>(undefined, cmp);
+			tree.insert(1);	// empty leaf: no comparison yet
+			expect(() => tree.insert(2)).to.throw(InconsistentComparatorError);
+		});
+
+		it('does NOT throw for a valid comparator returning large, opposite-sign magnitudes', () => {
+			const tree = new BTree<number, number>(undefined, (a, b) => (a - b) * 1_000_000);
+			for (const k of seq(0, 50)) tree.insert(k);
+			assertTreeInvariants(tree);
+		});
+	});
+
 	describe('comparator invocation count (perf goal)', () => {
 		// Build two structurally identical ~1000-entry trees whose comparators count invocations. Past the
 		// default sample window, a find on the default tree issues ~one compare per logical comparison, while

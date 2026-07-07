@@ -590,7 +590,7 @@ export class BTree<TKey, TEntry> {
 	protected compareKeys(a: TKey, b: TKey): number {
 		const result = this.compare(a, b);
 		if (this._checkComparator || this._sampleChecksRemaining > 0) {
-			if (result !== 0 && result === this.compare(b, a)) {
+			if (Math.sign(this.compare(b, a)) !== -Math.sign(result)) {
 				throw new InconsistentComparatorError();
 			}
 			if (!this._checkComparator && this._sampleChecksRemaining > 0) {
