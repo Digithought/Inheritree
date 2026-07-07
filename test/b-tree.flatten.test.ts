@@ -89,6 +89,21 @@ describe('BTree.flatten (genuine-isolation copy)', () => {
 		expect(Object.isFrozen(entry), 'entries not frozen when freeze is false').to.equal(false);
 	});
 
+	it('carries over the SAFE defaults (freeze: true, checkComparator: false) - a flatten that hardcoded freeze:false would silently break protection', () => {
+		// A source built with defaults: freeze on, per-comparison check off. flatten() must reproduce both, or
+		// the flattened tree quietly loses key-mutation protection while the freeze:false test above still passes.
+		const tree = new BTree<number, Entry>(keyOf, cmp);
+		for (let i = 1; i <= 10; i++) tree.insert({ id: i, value: `v${i}` });
+
+		const flat = tree.flatten();
+
+		expect((flat as any)['_freeze'], 'freeze default (true) carried over').to.equal(true);
+		expect((flat as any)['_checkComparator'], 'checkComparator default (false) carried over').to.equal(false);
+
+		// freeze: true means buildFrom froze the entries in the flattened tree.
+		expect(Object.isFrozen(flat.get(1)!), 'entries frozen when freeze defaults to true').to.equal(true);
+	});
+
 	it('large multi-level tree: flatten() reproduces exact key/value set and passes structural invariants', () => {
 		const tree = new BTree<number, Entry>(keyOf, cmp);
 		for (let i = 1; i <= NodeCapacity * 20; i++) tree.insert({ id: i, value: `v${i}` });
