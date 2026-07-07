@@ -882,7 +882,7 @@ export class BTree<TKey, TEntry> {
 		const pathBranch = path.branches[branchIndex];
 		const { index } = pathBranch;
 		pathBranch.index += split.indexDelta;
-		const mutable = this.mutableBranch(path.branches.slice(0, branchIndex + 1), path);
+		const mutable = this.mutableBranch(path, branchIndex);
 		mutable.partitions.splice(index, 0, split.key);
 		mutable.nodes.splice(index + 1, 0, split.right);
 		if (mutable.nodes.length <= NodeCapacity) {  // no split needed
@@ -920,7 +920,7 @@ export class BTree<TKey, TEntry> {
 
 		const rightSib = pNode.nodes[pIndex + 1] as LeafNode<TEntry> | undefined;
 		if (rightSib && rightSib.entries.length > HalfCapacity) {   // Attempt to borrow from right sibling
-			const rightMutable = this.mutableLeaf(leafSibPath(path, rightSib, 1), path);
+			const rightMutable = this.mutableLeaf(path, rightSib, 1);
 			const leafMutable = this.mutableLeaf(path);
 			const entry = rightMutable.entries.shift()!;
 			leafMutable.entries.push(entry);
@@ -930,7 +930,7 @@ export class BTree<TKey, TEntry> {
 
 		const leftSib = pNode.nodes[pIndex - 1] as LeafNode<TEntry> | undefined;
 		if (leftSib && leftSib.entries.length > HalfCapacity) {   // Attempt to borrow from left sibling
-			const leftMutable = this.mutableLeaf(leafSibPath(path, leftSib, -1), path);
+			const leftMutable = this.mutableLeaf(path, leftSib, -1);
 			const leafMutable = this.mutableLeaf(path);
 			const entry = leftMutable.entries.pop()!;
 			leafMutable.entries.unshift(entry);
@@ -941,7 +941,7 @@ export class BTree<TKey, TEntry> {
 
 		if (rightSib && rightSib.entries.length + leaf.entries.length <= NodeCapacity) {  // Attempt to merge right sibling into leaf (right sib deleted)
 			const leafMutable = this.mutableLeaf(path);
-			const pNodeMutable = this.mutableBranch(path.branches);
+			const pNodeMutable = this.mutableBranch(path, depth);
 			leafMutable.entries.push(...rightSib.entries);
 			pNodeMutable.partitions.splice(pIndex, 1);
 			pNodeMutable.nodes.splice(pIndex + 1, 1);
@@ -953,8 +953,8 @@ export class BTree<TKey, TEntry> {
 		}
 
 		if (leftSib && leftSib.entries.length + leaf.entries.length <= NodeCapacity) {  // Attempt to merge into left sibling (leaf deleted)
-			const leftMutable = this.mutableLeaf(leafSibPath(path, leftSib, -1), path);
-			const pNodeMutable = this.mutableBranch(path.branches);
+			const leftMutable = this.mutableLeaf(path, leftSib, -1);
+			const pNodeMutable = this.mutableBranch(path, depth);
 			path.leafNode = leftMutable;
 			path.leafIndex += leftMutable.entries.length;
 			leftMutable.entries.push(...leaf.entries);
@@ -981,8 +981,8 @@ export class BTree<TKey, TEntry> {
 
 		const rightSib = pNode.nodes[pIndex + 1] as BranchNode<TKey, TEntry> | undefined;
 		if (rightSib && rightSib.nodes.length > HalfCapacity) {   // Attempt to borrow from right sibling
-			const rightMutable = this.mutableBranch(branchSibSegments(path, depth, rightSib, 1), path);
-			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			const rightMutable = this.mutableBranch(path, depth, rightSib, 1);
+			const branchMutable = this.mutableBranch(path, depth);
 			branchMutable.partitions.push(pNode.partitions[pIndex]);
 			const node = rightMutable.nodes.shift()!;
 			branchMutable.nodes.push(node);
@@ -993,8 +993,8 @@ export class BTree<TKey, TEntry> {
 
 		const leftSib = pNode.nodes[pIndex - 1] as BranchNode<TKey, TEntry> | undefined;
 		if (leftSib && leftSib.nodes.length > HalfCapacity) {   // Attempt to borrow from left sibling
-			const leftMutable = this.mutableBranch(branchSibSegments(path, depth, leftSib, -1), path);
-			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			const leftMutable = this.mutableBranch(path, depth, leftSib, -1);
+			const branchMutable = this.mutableBranch(path, depth);
 			branchMutable.partitions.unshift(pNode.partitions[pIndex - 1]);
 			const node = leftMutable.nodes.pop()!;
 			branchMutable.nodes.unshift(node);
@@ -1005,8 +1005,8 @@ export class BTree<TKey, TEntry> {
 		}
 
 		if (rightSib && rightSib.nodes.length + branch.nodes.length <= NodeCapacity) {   // Attempt to merge right sibling into self
-			const pMutable = this.mutableBranch(path.branches.slice(0, depth), path);
-			const branchMutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			const pMutable = this.mutableBranch(path, depth - 1);
+			const branchMutable = this.mutableBranch(path, depth);
 			const pKey = pMutable.partitions.splice(pIndex, 1)[0]
 			branchMutable.partitions.push(pKey);
 			branchMutable.partitions.push(...rightSib.partitions);
@@ -1019,8 +1019,8 @@ export class BTree<TKey, TEntry> {
 		}
 
 		if (leftSib && leftSib.nodes.length + branch.nodes.length <= NodeCapacity) {   // Attempt to merge self into left sibling
-			const pMutable = this.mutableBranch(path.branches.slice(0, depth), path);
-			const leftMutable = this.mutableBranch(branchSibSegments(path, depth, leftSib, -1), path);
+			const pMutable = this.mutableBranch(path, depth - 1);
+			const leftMutable = this.mutableBranch(path, depth, leftSib, -1);
 			pathBranch.node = leftMutable;
 			pathBranch.index += leftMutable.nodes.length;
 			const pKey = pMutable.partitions.splice(pIndex - 1, 1)[0];
@@ -1034,42 +1034,71 @@ export class BTree<TKey, TEntry> {
 
 	private updatePartition(nodeIndex: number, path: PathImpl<TKey, TEntry>, depth: number, newKey: TKey) {
 		if (nodeIndex > 0) {  // Only affects this branch; just update the partition key
-			const mutable = this.mutableBranch(path.branches.slice(0, depth + 1), path);
+			const mutable = this.mutableBranch(path, depth);
 			mutable.partitions[nodeIndex - 1] = newKey;
 		} else if (depth !== 0) {
 			this.updatePartition(path.branches[depth - 1].index, path, depth - 1, newKey);
 		}
 	}
 
-	/** Returns a mutable copy of the given leaf node, replacing parent references through the root as needed. */
-	private mutableLeaf(path: PathImpl<TKey, TEntry>, mainPath?: PathImpl<TKey, TEntry>): LeafNode<TEntry> {
-		if (this.base && path.leafNode.tree !== this) {
+	/** Returns a mutable copy of a leaf, cloning it and its rootward spine only when this tree does not already
+	 * own it.  Two coordinate forms, both addressed against the live `path` (never a pre-built clone):
+	 *  - main spine (no `sib`): the leaf is `path.leafNode`, cloned rootward along `path.branches`.
+	 *  - sibling borrow/merge (`sib`, `delta`): the leaf is `sib`, reached through the shared parent by shifting
+	 *    the deepest branch index by `delta` (+1 right, -1 left) so it addresses the sibling's slot, not the main
+	 *    leaf's — without this the wrong slot is made mutable and the borrow/merge corrupts the COW linkage.
+	 * The clone material (map, sibling spine copy) is built lazily, only after a clone is decided, so a plain
+	 * (base-less) tree or an already-owned leaf allocates nothing (F3). */
+	private mutableLeaf(path: PathImpl<TKey, TEntry>, sib?: LeafNode<TEntry>, delta = 0): LeafNode<TEntry> {
+		const leaf = sib ?? path.leafNode;
+		if (this.base && leaf.tree !== this) {
 			const map = new Map<TreeNode<TKey, TEntry>, TreeNode<TKey, TEntry>>();
-			const newNode = path.leafNode.clone(this);
-			map.set(path.leafNode, newNode);
-			this.replaceRootward(newNode, path.branches, map);
-			(mainPath ?? path).remap(map);
+			const newNode = leaf.clone(this);
+			map.set(leaf, newNode);
+			// Build the rootward spine only now that a clone is required.  The main-spine case reuses
+			// path.branches directly; the sibling case needs an index-shifted copy so replaceRootward links the
+			// clone into the sibling's parent slot without disturbing the live path's own indices.
+			let branches = path.branches;
+			if (sib) {
+				branches = path.branches.map(b => b.clone());
+				if (branches.length > 0) {
+					branches[branches.length - 1].index += delta;
+				}
+			}
+			this.replaceRootward(newNode, branches, map);
+			path.remap(map);
 			return newNode;
 		}
-		return path.leafNode;
+		return leaf;
 	}
 
-	/** Returns a mutable copy of the given branch node, replacing rootward references in segments through the root as needed.
-	 * If a main path is provided, any rootward changes made in this traversal that overlap that path will also be reflected in the main path.
-	 */
-	private mutableBranch(segments: PathBranch<TKey, TEntry>[], mainPath?: PathImpl<TKey, TEntry>) {
-		// No base means nothing to copy-on-write against: the branch is already owned (or, for a
-		// hand-built tree, unowned but exclusively ours), so return it directly rather than running
-		// replaceRootward. Mirrors the `this.base` guard in mutableLeaf and avoids cloning nodes whose
-		// owner is unset (e.g. manually-constructed test trees), which would otherwise mutate a clone
-		// while the caller still holds the original.
-		if (!this.base) {
-			return segments.at(-1)!.node;
+	/** Returns a mutable copy of a branch, cloning it and its rootward spine only when this tree does not already
+	 * own it.  Two coordinate forms, both addressed against the live `path` (never a pre-built segment list):
+	 *  - main spine (no `sib`): the branch is `path.branches[depth]`, cloned rootward along `path.branches[0..depth]`.
+	 *  - sibling borrow/merge (`sib`, `delta`): the branch is `sib`, reached through the shared parent at
+	 *    `depth - 1` by shifting that parent's index by `delta` (see {@link branchSibSegments}).
+	 * An owned bottom branch implies all ancestors are owned (the upward-closed ownership invariant), so an
+	 * already-owned branch — or a base-less tree — returns immediately, allocating no map or segment list (F4).
+	 * The segment list is otherwise built lazily, only after a clone is decided (F3). */
+	private mutableBranch(path: PathImpl<TKey, TEntry>, depth: number, sib?: BranchNode<TKey, TEntry>, delta = 0): BranchNode<TKey, TEntry> {
+		const branch = sib ?? path.branches[depth].node;
+		// No base means nothing to copy-on-write against (branch already owned, or a hand-built tree's unowned-but-
+		// exclusively-ours node); an owned bottom branch means the whole rootward spine is owned too.  Either way
+		// return it directly rather than allocating a map + running replaceRootward + remapping an empty map.
+		// NOTE: the owned-branch fast path is correct ONLY while ownership stays upward-closed (an owned node never
+		// sits beneath a base-owned ancestor - assertOwnershipInvariant check 1). If that invariant is ever
+		// weakened, this would skip a needed clone and corrupt the derived tree; revisit here first.
+		if (!this.base || branch.tree === this) {
+			return branch;
 		}
+		// Clone required: build the segment list now.  Sibling => the index-shifted spine addressing the sibling
+		// through its shared parent; main spine => the plain rootward slice.
+		const segments = sib
+			? branchSibSegments(path, depth, sib, delta)
+			: path.branches.slice(0, depth + 1);
 		const map = new Map<TreeNode<TKey, TEntry>, TreeNode<TKey, TEntry>>();
 		this.replaceRootward(undefined, segments, map);
-		mainPath?.remap(map);
-		const branch = segments.at(-1)!.node;
+		path.remap(map);
 		return map.get(branch) as BranchNode<TKey, TEntry> ?? branch;
 	}
 
@@ -1103,17 +1132,6 @@ export class BTree<TKey, TEntry> {
 	}
 }
 
-function leafSibPath<TKey, TEntry>(path: PathImpl<TKey, TEntry>, sib: LeafNode<TEntry>, delta: number): PathImpl<TKey, TEntry> {
-	const branches = path.branches.map(b => b.clone());
-	// Shift the deepest branch index by `delta` so the cloned path addresses the sibling's
-	// parent slot (pIndex + delta), not the deleted leaf's slot. Without this, the wrong slot
-	// is made mutable and the borrow/merge corrupts the COW node linkage.
-	if (branches.length > 0) {
-		branches[branches.length - 1].index += delta;
-	}
-	return new PathImpl<TKey, TEntry>(branches, sib, path.leafIndex + delta, path.on, path.version);
-}
-
 /**
  * Builds the branch-segment list addressing a *sibling* of the underflowing branch at `path.branches[depth]`,
  * for a copy-on-write `mutableBranch` clone during a branch borrow/merge. The parent of both the underflowing
@@ -1122,10 +1140,9 @@ function leafSibPath<TKey, TEntry>(path: PathImpl<TKey, TEntry>, sib: LeafNode<T
  * must be shifted by `delta` — otherwise `replaceRootward`, on reaching the (already-owned) parent, would link
  * the freshly-cloned sibling into the underflowing branch's slot, clobbering it and orphaning a whole subtree.
  *
- * This is the branch-level analogue of {@link leafSibPath} (the leaf-level borrow/merge); the original inline
- * construction shifted the *sibling* segment's index instead of the *parent's*, which `replaceRootward` never
- * reads (the sibling is the deepest segment), so the shift had no effect and the corruption escaped. The
- * sibling's own appended index is unused by the clone and is left at 0.
+ * This is the branch-level analogue of the sibling form of {@link BTree.mutableLeaf} (which inlines the same
+ * parent-index shift for the leaf-level borrow/merge). The sibling's own appended index is unused by the clone
+ * and is left at 0.  Called only from {@link BTree.mutableBranch}, lazily, once a clone is actually required.
  */
 function branchSibSegments<TKey, TEntry>(path: PathImpl<TKey, TEntry>, depth: number, sib: BranchNode<TKey, TEntry>, delta: number): PathBranch<TKey, TEntry>[] {
 	const segments = path.branches.slice(0, depth).map(b => b.clone());

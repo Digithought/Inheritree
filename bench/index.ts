@@ -116,6 +116,30 @@ for (const kind of KINDS) {
 			}
 		}
 	}, { beforeEach: () => { churnTree = BTree.buildFrom<Key, Key>(sortedKeys); } });
+
+	// Delete-heavy: delete every key (shuffled order) from a freshly-built PLAIN (base-less) tree per rep.
+	// Borrow/merge cascades exercise the sibling paths and repeated mutableBranch calls on an owned spine -
+	// the workload targeted by the COW-lazy-mutable-node change (F3: the COW plumbing must not tax a plain tree).
+	const deleteKeys = shuffle(sortedKeys, lcg(9));
+	let deletePlainTree: BTree<Key, Key>;
+	bench.add(`delete-heavy, plain (${kind})`, () => {
+		for (const key of deleteKeys) {
+			const path = deletePlainTree.find(key);
+			if (path.on) deletePlainTree.deleteAt(path);
+		}
+	}, { beforeEach: () => { deletePlainTree = BTree.buildFrom<Key, Key>(sortedKeys); } });
+
+	// Delete-heavy on a DERIVED (copy-on-write) child: base built once (immutable while children exist),
+	// a fresh child derived per rep. The first delete clones the write path; every later delete then hits
+	// the already-owned spine - the F4 target (mutableBranch ownership fast path).
+	const deleteBase = BTree.buildFrom<Key, Key>(sortedKeys);
+	let deleteDerivedTree: BTree<Key, Key>;
+	bench.add(`delete-heavy, derived (${kind})`, () => {
+		for (const key of deleteKeys) {
+			const path = deleteDerivedTree.find(key);
+			if (path.on) deleteDerivedTree.deleteAt(path);
+		}
+	}, { beforeEach: () => { deleteDerivedTree = new BTree<Key, Key>(undefined, undefined, deleteBase); } });
 }
 
 await bench.run();
