@@ -77,7 +77,7 @@ Via pnpm/yarn:
 
 #### Paths
 
-Many methods take and return Path objects.  All paths not returned from a mutation operation itself are invalid after mutation and any attempt to use them will throw an exception.  None of the public methods will mutate a given path, except for `moveNext` and `movePrior`.
+Many methods take and return Path objects.  All paths not returned from a mutation operation itself are invalid after mutation and any attempt to use them will throw an exception.  `moveNext` and `movePrior` mutate the path they are given, and `deleteAt` mutates the path passed to it (leaving it valid - see below).
 
 ```ts
   tree.updateAt(tree.last().prior(), 7);  // this is fine
@@ -86,6 +86,16 @@ Many methods take and return Path objects.  All paths not returned from a mutati
   const ninePath = tree.updateAt(tree.find(5), 9);
   tree.updateAt(ninePath, 8);  // Fine, ninePath came from mutation
   //tree.updateAt(path1, 7);  // DON'T USE path1 - invalid after mutation
+```
+
+`deleteAt` is a special case: the path you pass it stays valid after the delete, positioned at the "crack" the deleted entry left behind (its `on` becomes false).  A following `moveNext` recovers onto the deleted entry's successor and `movePrior` onto its predecessor - so you can delete while iterating without re-`find`ing:
+
+```ts
+  let p = tree.find(startKey);
+  while (p.on) {
+    if (shouldDelete(tree.at(p))) tree.deleteAt(p);  // p now sits at the successor's crack
+    tree.moveNext(p);  // after a delete: recovers onto the successor; otherwise: advances normally
+  }
 ```
 
 ### Background
