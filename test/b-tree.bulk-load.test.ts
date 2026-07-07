@@ -18,6 +18,19 @@ const SIZES = [0, 1, C - 1, C, C + 1, 1000, 100_000];
 // A full ascending traversal, read as an array of entries (aliasing-free entry iterator).
 const ascendingEntries = <TKey, TEntry>(tree: BTree<TKey, TEntry>): TEntry[] => [...tree.entries()];
 
+// Walks the raw node tree (via `_root`, as assertTreeInvariants does) collecting each leaf's entry count.
+// Used to assert bulk load's defining property - dense packing - which the [32,64] fill invariant alone
+// cannot: a half-full (insert-like) result also satisfies the invariant.
+const leafFills = <TKey, TEntry>(tree: BTree<TKey, TEntry>): number[] => {
+	const fills: number[] = [];
+	const walk = (node: any): void => {
+		if (Array.isArray(node.entries)) fills.push(node.entries.length);	// LeafNode
+		else for (const child of node.nodes) walk(child);	// BranchNode
+	};
+	walk((tree as any)['_root']);
+	return fills;
+};
+
 describe('BTree.buildFrom (bulk load from sorted input)', () => {
 
 	describe('builds a valid tree at every size', () => {
@@ -52,6 +65,28 @@ describe('BTree.buildFrom (bulk load from sorted input)', () => {
 			const tree = BTree.buildFrom<number, number>(seq(100_000));
 			assertTreeInvariants(tree);
 			expect(tree.size).to.equal(100_000);
+		});
+	});
+
+	describe('packs nodes densely (the point of bulk load, which the [32,64] fill invariant alone does not prove)', () => {
+		// An insert-built tree leaves leaves ~half full (~n/32 leaves); bulk load packs near capacity (~n/64).
+		// Asserting the leaf count sits near the dense floor guards against a regression to half-full packing
+		// that assertTreeInvariants would happily accept.
+		for (const n of [1000, 10_000, 100_000]) {
+			it(`n=${n}: leaf count is near ceil(n/${C}), not the ~2x of half-full packing`, () => {
+				const fills = leafFills(BTree.buildFrom<number, number>(seq(n)));
+				const minLeaves = Math.ceil(n / C);	// theoretical densest
+				// Redistribution of a small final chunk can add at most one extra leaf; allow a slack of 1.
+				expect(fills.length, 'leaf count').to.be.at.most(minLeaves + 1);
+				expect(fills.reduce((a, b) => a + b, 0), 'entries across leaves').to.equal(n);
+				// Every non-final leaf is packed at capacity; only the last (possibly redistributed) pair differs.
+				for (const fill of fills) expect(fill).to.be.within(C >>> 1, C);
+			});
+		}
+
+		it('n=65: the trailing 64,1 pair is redistributed to two ~half leaves, not left as 64 + underfull 1', () => {
+			const fills = leafFills(BTree.buildFrom<number, number>(seq(C + 1)));
+			expect(fills).to.deep.equal([C >>> 1, (C >>> 1) + 1]);	// [32, 33]
 		});
 	});
 

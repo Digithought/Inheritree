@@ -107,7 +107,9 @@ export class BTree<TKey, TEntry> {
 	 *
 	 * The input must be strictly ascending **by `compare`**.  It is validated - and, unless disabled, frozen - in
 	 * one linear pass; the first out-of-order or duplicate pair throws {@link UnsortedInputError} and nothing is
-	 * returned (the partially-built work is discarded).
+	 * returned (the partially-built work is discarded).  Note the shared pass means that on the throw path the
+	 * entries *before* the offending pair have already been frozen in place; the discarded tree is unreachable but
+	 * those caller-owned objects stay frozen.  Pass `{ freeze: false }` if that side-effect matters.
 	 *
 	 * Parameter order and defaults mirror the {@link constructor} (keyFromEntry, then compare, then options), so a
 	 * trusted load can pass `{ freeze: false }` to skip freezing.
