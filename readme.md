@@ -23,7 +23,7 @@ Features:
 * **Ranges** using `range`, ascending or descending, with optional inclusive/exclusive end-points
 * **Path** navigation through `next` and `prior` or `moveNext` and `movePrior`
 * **Find nearest**, using `next` on an unsuccessful path
-* **Count** using `getCount`, computed by summing leaf entries
+* **Count** using `size` or the no-arg `getCount` — O(1), from a stored count; `getCount({ path, ascending })` walks for a partial count from a cursor
 * **Clear** using `clear` to empty the tree in place (invalidates outstanding paths; reusable afterward)
 
 WARNING: by default this library freezes added entries to reduce the chance that keys are externally mutated, but this is not done transitively, so it is possible that an object's key can be mutated after adding, resulting in tree corruption.  Don't attempt to change a key value after it has been inserted.  Use updateAt, upsert, insdate, or deleteAt/insert to change the key value.

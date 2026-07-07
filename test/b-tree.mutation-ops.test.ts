@@ -71,6 +71,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// root -> 4 full leaves, spaced so a fresh key lands strictly inside the second leaf.
 			const root = branchOf([leafOf(seq(0, C)), leafOf(seq(1000, C)), leafOf(seq(2000, C)), leafOf(seq(3000, C))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 4 * C;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);	// 256 keys
 
@@ -89,6 +90,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('inserting a new key at a full leaf tail splits with the new key in the new leaf (delta 1)', () => {
 			const root = branchOf([leafOf(seq(0, C)), leafOf(seq(1000, C)), leafOf(seq(2000, C))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * C;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -134,6 +136,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('insert branch: a merge of an absent key splits a full leaf and leaves the path on the new row', () => {
 			const root = branchOf([leafOf(seq(0, C)), leafOf(seq(1000, C)), leafOf(seq(2000, C))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * C;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -176,6 +179,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// the random stream) only ever keep the key, so this is the sole end-to-end cover of that path.
 			const root = branchOf([leafOf(seq(0, MIN + 4)), leafOf(seq(100, MIN + 4)), leafOf(seq(200, MIN + 4))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * (MIN + 4);	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -195,6 +199,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('conflict: getUpdated returning an already-present key leaves the path off and the tree unchanged', () => {
 			const root = branchOf([leafOf(seq(0, MIN)), leafOf(seq(100, MIN)), leafOf(seq(200, MIN))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * MIN;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 			const beforeShape = shapeOf(tree);
@@ -244,6 +249,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// inserted new key forces in the full middle leaf.
 			const root = branchOf([leafOf(seq(0, MIN + 4)), leafOf(seq(1000, C)), leafOf(seq(2000, MIN + 4))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = (MIN + 4) + C + (MIN + 4);	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -266,6 +272,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			// and the root loses a child.
 			const root = branchOf([leafOf(seq(0, MIN)), leafOf(seq(100, MIN)), leafOf(seq(200, MIN)), leafOf(seq(300, MIN + 4))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * MIN + (MIN + 4);	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 
@@ -285,6 +292,7 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 		it('(c) the new key already exists -> failure path, tree left unchanged', () => {
 			const root = branchOf([leafOf(seq(0, MIN)), leafOf(seq(100, MIN)), leafOf(seq(200, MIN))]);
 			(tree as any)['_root'] = root;
+			(tree as any)['_count'] = 3 * MIN;	// stored count must match the hand-built tree (rule 7 reads it, not a walk)
 			assertTreeInvariants(tree);
 			const before = ascendingValues(tree);
 			const beforeShape = shapeOf(tree);

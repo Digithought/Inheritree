@@ -128,6 +128,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const root = branchOf([Bmid, Bright]);
 		(tree as any)['_root'] = root;
 		const total = cur.next;
+		(tree as any)['_count'] = total;	// stored count must match the hand-built tree (getCount/rule 7 read it, not a walk)
 		assertTreeInvariants(tree);
 
 		const d = deleteToUnderflow(Bmid);
@@ -150,6 +151,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const root = branchOf([Bleft, Bmid]);
 		(tree as any)['_root'] = root;
 		const total = cur.next;
+		(tree as any)['_count'] = total;	// stored count must match the hand-built tree (getCount/rule 7 read it, not a walk)
 		assertTreeInvariants(tree);
 
 		const d = deleteToUnderflow(Bmid);
@@ -173,6 +175,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const root = branchOf([Ba, Bmid, Bright]);
 		(tree as any)['_root'] = root;
 		const total = cur.next;
+		(tree as any)['_count'] = total;	// stored count must match the hand-built tree (getCount/rule 7 read it, not a walk)
 		assertTreeInvariants(tree);
 
 		const d = deleteToUnderflow(Bmid);
@@ -197,6 +200,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const root = branchOf([Ba, Bleft, Bmid]);
 		(tree as any)['_root'] = root;
 		const total = cur.next;
+		(tree as any)['_count'] = total;	// stored count must match the hand-built tree (getCount/rule 7 read it, not a walk)
 		assertTreeInvariants(tree);
 
 		const d = deleteToUnderflow(Bmid);
@@ -219,6 +223,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const root = branchOf([Ba, Bb]);
 		(tree as any)['_root'] = root;
 		const total = cur.next;
+		(tree as any)['_count'] = total;	// stored count must match the hand-built tree (getCount/rule 7 read it, not a walk)
 		assertTreeInvariants(tree);
 		expect(asImpl(tree.find(0)).branches.length).to.equal(2);	// 3-level tree before the delete
 
@@ -244,6 +249,7 @@ describe('Branch-level rebalance (rebalanceBranch)', () => {
 		const root = branchOf([B1a, B1left, B1]);
 		(tree as any)['_root'] = root;
 		const total = cur.next;	// 3 * 32^3 = 98304
+		(tree as any)['_count'] = total;	// stored count must match the hand-built tree (getCount/rule 7 read it, not a walk)
 		assertTreeInvariants(tree);
 		expect(asImpl(tree.find(0)).branches.length).to.equal(3);	// 4-level tree
 

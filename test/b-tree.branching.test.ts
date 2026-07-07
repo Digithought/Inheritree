@@ -122,6 +122,7 @@ describe('Branching BTree', () => {
 		const rightLeaf = new LeafNode([...Array(halfCap).keys()].map(i => i + 100));	// [100..131]
 		const rootBranch = new BranchNode<number, number>([50, 100], [leftLeaf, middleLeaf, rightLeaf]);
 		(tree as any)['_root'] = rootBranch;
+		(tree as any)['_count'] = halfCap * 2 + 1;	// stored count must match the hand-built tree (getCount now reads it, not a walk)
 
 		// Verify setup
 		expect(tree.getCount()).to.equal(halfCap * 2 + 1);
@@ -223,6 +224,7 @@ describe('Branching BTree', () => {
 
 		const rootBranchNode = new BranchNode(partitions, leaves); // Access BranchNode constructor
 		(tree as any)['_root'] = rootBranchNode;
+		(tree as any)['_count'] = C * C;	// C leaves x C entries; stored count must match before the public insert below bumps it
 
 		// Critical Insertion:
 		// Target leaf L_k where k = K_TARGET_LEAF_INDEX (e.g., L_31).

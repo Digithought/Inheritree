@@ -54,6 +54,16 @@ export class BTree<TKey, TEntry> {
 	 * practical in-memory concern, so it is left as a plain counter rather than wrapped. */
 	private _version = 0;
 
+	/** Stored entry count, maintained by exactly one +1 per real insertion ({@link internalInsertAt}) and one
+	 * -1 per real deletion ({@link internalDelete}'s success branch), so the no-arg {@link getCount} and
+	 * {@link size} are O(1) rather than a full leaf walk.  No-ops (rejected duplicate insert, in-place
+	 * update/upsert of an unchanged key, off-entry delete) never reach either site and so leave this untouched.
+	 * Like {@link _version} it is a plain integer: in-memory entry counts never approach the 2^53 safe-integer
+	 * limit, so no overflow handling is needed.
+	 * NOTE: white-box code that fabricates a tree by assigning `_root` past the public insert path must also set
+	 * `_count` to the true entry count, else the no-arg count and `assertTreeInvariants` rule 7 go stale. */
+	private _count = 0;
+
 	/** Number of leading comparisons antisymmetry-checked when checkComparator is false. */
 	private static readonly SampleCheckCount = 32;
 	private readonly _freeze: boolean;
@@ -309,20 +319,29 @@ export class BTree<TKey, TEntry> {
 	 * way to empty a tree in place, rather than deleting every entry or discarding the instance. */
 	clear(): void {
 		this._root = new LeafNode<TEntry>([]);
+		this._count = 0;
 		++this._version;
 	}
 
-	/** Computed (not stored) count.  Computes the sum using leaf-node lengths.  O(n/af) where af is average fill.
-	 * @param from if provided, the count will start from the given path (inclusive).  If ascending is false,
-	 * 	the count will start from the end of the tree.  Ascending is true by default.
+	/** The total number of entries in the tree (an alias for the no-arg {@link getCount}).  O(1) - reads the
+	 * stored count, maintained per mutation. */
+	get size(): number {
+		return this._count;
+	}
+
+	/** Number of entries in the tree.  With no argument, O(1): returns the stored count.
+	 * @param from if provided, the count is a partial count that walks from the given path (inclusive) - O(n/af)
+	 * 	where af is average fill.  If ascending is false, the count starts from the end of the tree.  Ascending is
+	 * 	true by default.  This overload cannot be answered from the stored count and always walks.
 	 */
 	getCount(from?: { path: Path<TKey, TEntry>, ascending?: boolean }): number {
-		if (from) {
-			this.validatePath(from.path as PathImpl<TKey, TEntry>);	// Validate here (public entry point): internalNext/internalPrior no longer self-validate.
+		if (!from) {
+			return this._count;	// O(1): stored count, maintained by internalInsertAt / internalDelete
 		}
+		this.validatePath(from.path as PathImpl<TKey, TEntry>);	// Validate here (public entry point): internalNext/internalPrior no longer self-validate.
 		let result = 0;
-		const path = (from ? from.path.clone() : this.first()) as PathImpl<TKey, TEntry>;
-		if (from?.ascending ?? true) {
+		const path = from.path.clone() as PathImpl<TKey, TEntry>;
+		if (from.ascending ?? true) {
 			while (path.on) {
 				result += path.leafNode.entries.length - path.leafIndex;
 				path.leafIndex = path.leafNode.entries.length - 1;
@@ -582,6 +601,7 @@ export class BTree<TKey, TEntry> {
 
 	private internalDelete(path: PathImpl<TKey, TEntry>): boolean {
 		if (path.on) {
+			--this._count;	// The one deletion chokepoint - off-entry (no-op) deletes take the else branch and leave the count alone.
 			path.leafNode.entries.splice(path.leafIndex, 1);
 			if (path.branches.length > 0) {   // Only worry about underflows, balancing, etc. if not root
 				if (path.leafIndex === 0 && path.leafNode.entries.length > 0) { // If we deleted index 0 and leaf is not empty, update branches with new key
@@ -612,6 +632,7 @@ export class BTree<TKey, TEntry> {
 	}
 
 	private internalInsertAt(path: PathImpl<TKey, TEntry>, entry: TEntry) {
+		++this._count;	// The one insertion chokepoint - every public insert (insert/upsert/merge/key-change updateAt) funnels here.
 		let split = this.leafInsert(path, entry);
 		let branchIndex = path.branches.length - 1;
 		while (split && branchIndex >= 0) {
