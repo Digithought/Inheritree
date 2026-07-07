@@ -8,7 +8,13 @@ declare const process: { env: Record<string, string | undefined> };
 // Entry count per scenario. Override with `BENCH_N=100000 yarn bench` to push the size up; the default
 // keeps the whole suite (five scenarios x number/string keys, plus the optional buildFrom/no-freeze variants)
 // to a handful of seconds.
-const N = Number(process.env.BENCH_N ?? 10_000);
+const N = process.env.BENCH_N === undefined ? 10_000 : Number(process.env.BENCH_N);
+// Guard a garbled override loudly: `Number('10_000')` (JS separators don't parse from a string) and any
+// non-digit are NaN, and NaN/0/negatives would otherwise make `Array.from({ length: N })` silently empty -
+// a benchmark that prints an all-zero table and looks like it ran. Fail fast with a usable message instead.
+if (!Number.isInteger(N) || N < 1) {
+	throw new Error(`BENCH_N must be a positive integer (got ${JSON.stringify(process.env.BENCH_N)}); use plain digits, e.g. BENCH_N=100000.`);
+}
 
 type Key = number | string;
 type Kind = 'number' | 'string';
@@ -89,6 +95,10 @@ for (const kind of KINDS) {
 
 	// Mixed churn: fresh pre-populated tree per rep (rebuild cost lands in beforeEach, so it isn't timed),
 	// then interleaved random insert/deleteAt, driving repeated splits and merges/borrows.
+	// NOTE: `churnRng` is drawn per-iteration and advances across tinybench reps, so the realized
+	// insert:delete split varies rep-to-rep and the number of reps depends on host speed - it is NOT an
+	// exactly-half-and-half nor host-portable-deterministic sequence. Fine for a throughput average; if a
+	// future reader needs an exact/reproducible split, pre-build an interleaved op-type array per rep instead.
 	const churnOpCount = Math.floor(N / 2);
 	const churnRng = lcg(6);
 	const churnInsertKeys = shuffle(extraKeys, lcg(7)).slice(0, Math.ceil(churnOpCount / 2));
