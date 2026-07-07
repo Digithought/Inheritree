@@ -17,6 +17,7 @@ Features:
 * **Tunable safety costs** - optional constructor flags (`freeze`, `checkComparator`) let throughput-sensitive callers opt out of per-operation safety work; both default to the safe behavior
 * **Light weight** - very little memory used, only important primitives
 * **CRUD**: `insert`, `updateAt`, `deleteAt`, `find`, `first`, `last`
+* **Bulk load** using the static `BTree.buildFrom(sorted, ...)` — builds the whole tree from already-sorted, duplicate-free input in one O(n) pass, packing nodes near capacity (throws `UnsortedInputError` on unsorted/duplicate input)
 * **Upsert and Merge** for efficient hybrid mutation
 * **Entry iteration** using `entries` and `keys`, or `for (const entry of tree)` / `[...tree]` — the safe default for reading (yields distinct values, no cursor aliasing)
 * **Enumerations** using `ascending` and `descending` (from an optional starting path; no argument walks the whole tree)

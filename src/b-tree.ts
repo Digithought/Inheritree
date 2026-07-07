@@ -23,6 +23,12 @@ export class InconsistentComparatorError extends Error {
 	constructor(message = "Inconsistent comparison function for given values") { super(message); this.name = "InconsistentComparatorError"; }
 }
 
+/** Thrown by {@link BTree.buildFrom} when its input is not strictly ascending by the comparator - either an
+ * out-of-order pair (compare > 0) or a duplicate (compare === 0).  The message names the offending pair. */
+export class UnsortedInputError extends Error {
+	constructor(message = "Input is not strictly ascending by the comparator") { super(message); this.name = "UnsortedInputError"; }
+}
+
 /** Optional, per-tree tuning of the two always-on safety costs.  Both default to the safe behavior. */
 export interface BTreeOptions {
 	/** Freeze entries on insert/update/upsert/merge to deter key mutation.  Default true (safe).
@@ -91,6 +97,110 @@ export class BTree<TKey, TEntry> {
 	private freezeEntry(entry: TEntry): TEntry {
 		if (this._freeze) Object.freeze(entry);
 		return entry;
+	}
+
+	/**
+	 * Builds a tree in a single bottom-up pass from already-sorted, duplicate-free input.  O(n) - versus the
+	 * O(n log n) of repeated {@link insert} - and packs nodes near capacity rather than the roughly half-full
+	 * nodes that natural splits leave behind.  The result is indistinguishable from a tree built by inserting the
+	 * same entries (same structural invariants, same query answers) and is returned fresh at version 0.
+	 *
+	 * The input must be strictly ascending **by `compare`**.  It is validated - and, unless disabled, frozen - in
+	 * one linear pass; the first out-of-order or duplicate pair throws {@link UnsortedInputError} and nothing is
+	 * returned (the partially-built work is discarded).
+	 *
+	 * Parameter order and defaults mirror the {@link constructor} (keyFromEntry, then compare, then options), so a
+	 * trusted load can pass `{ freeze: false }` to skip freezing.
+	 * @param sorted any iterable of entries, strictly ascending by `compare` (array, generator, Set, ...).
+	 */
+	static buildFrom<TKey, TEntry>(
+		sorted: Iterable<TEntry>,
+		keyFromEntry?: (entry: TEntry) => TKey,
+		compare?: (a: TKey, b: TKey) => number,
+		options?: BTreeOptions,
+	): BTree<TKey, TEntry> {
+		const tree = new BTree<TKey, TEntry>(keyFromEntry, compare, options);
+		const entries = [...sorted];
+		const n = entries.length;
+		const keyOf = tree.keyFromEntry;
+
+		// One linear pass: validate strict-ascending order (compareKeys >= 0 catches both > 0 out-of-order and
+		// = 0 duplicate) and freeze each entry (respecting the freeze option).  Routing through compareKeys also
+		// runs the comparator's antisymmetry sample-check during load, for free.
+		let prevKey!: TKey;
+		for (let i = 0; i < n; i++) {
+			const entry = entries[i];
+			const key = keyOf(entry);
+			if (i > 0) {
+				const cmp = tree.compareKeys(prevKey, key);
+				if (cmp >= 0) {
+					throw new UnsortedInputError(cmp === 0
+						? `buildFrom: duplicate key - entries[${i - 1}] and entries[${i}] compare equal (input must be strictly ascending).`
+						: `buildFrom: out-of-order key - entries[${i - 1}] > entries[${i}] (input must be ascending by the comparator).`);
+				}
+			}
+			tree.freezeEntry(entry);
+			prevKey = key;
+		}
+
+		tree._count = n;
+		if (n === 0) {
+			return tree;	// constructor already left an empty-leaf root - a valid empty tree
+		}
+
+		// Pack leaves near capacity, carrying each node with its subtree-minimum key.  A subtree's minimum is its
+		// leftmost leaf's first key, so a freshly packed leaf's min is simply its first entry's key.
+		// NOTE: bulk-loaded leaves are packed to (near) NodeCapacity, so the FIRST insert into any full leaf
+		// splits immediately - the deliberate cost of dense packing.  If a bulk load is routinely followed by heavy
+		// insertion, an insert-built (roughly half-full) tree would churn less; bulk load optimizes for the load-then-read case.
+		let level: { node: TreeNode<TKey, TEntry>, min: TKey }[] = [];
+		let offset = 0;
+		for (const size of BTree.chunkSizes(n)) {
+			const chunk = entries.slice(offset, offset + size);
+			offset += size;
+			level.push({ node: new LeafNode<TEntry>(chunk), min: keyOf(chunk[0]) });
+		}
+
+		// Build branch levels up, grouping the current level's nodes (same chunking + redistribution) until one
+		// node remains - the root.  For a group of children [c0..ck]: partitions = [c1.min, ..., ck.min] and the
+		// branch's own min = c0.min (a branch subtree's min is its leftmost child's min).
+		while (level.length > 1) {
+			const parent: { node: TreeNode<TKey, TEntry>, min: TKey }[] = [];
+			let start = 0;
+			for (const size of BTree.chunkSizes(level.length)) {
+				const group = level.slice(start, start + size);
+				start += size;
+				const nodes = group.map(child => child.node);
+				const partitions = group.slice(1).map(child => child.min);
+				parent.push({ node: new BranchNode<TKey, TEntry>(partitions, nodes), min: group[0].min });
+			}
+			level = parent;
+		}
+		tree._root = level[0].node;
+		return tree;
+	}
+
+	/** Splits `total` items into node-sized chunk lengths so that no chunk except possibly the final (root) one
+	 * is underfull.  Full {@link NodeCapacity} caps first, then any remainder; if that remainder is below
+	 * {@link HalfCapacity} it is combined with the preceding full cap and the two split evenly, landing both in
+	 * [HalfCapacity, NodeCapacity].  Deciding sizes before slicing keeps partition/child indexing from drifting.
+	 * Applied identically to leaf entries and to branch children - the half-full threshold is the same for both. */
+	private static chunkSizes(total: number): number[] {
+		if (total <= NodeCapacity) return [total];
+		const sizes: number[] = [];
+		let remaining = total;
+		while (remaining > NodeCapacity) {
+			sizes.push(NodeCapacity);
+			remaining -= NodeCapacity;
+		}
+		sizes.push(remaining);	// remaining in [1, NodeCapacity]
+		const last = sizes.length - 1;
+		if (sizes[last] < HalfCapacity && sizes.length >= 2) {
+			const combined = sizes[last - 1] + sizes[last];	// NodeCapacity + remaining, in [65, 95]
+			sizes[last - 1] = combined >>> 1;	// in [32, 47]
+			sizes[last] = combined - sizes[last - 1];	// in [33, 48]
+		}
+		return sizes;
 	}
 
 	/** @returns a path to the first entry (on = false if no entries) */
