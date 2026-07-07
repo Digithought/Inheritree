@@ -233,6 +233,9 @@ describe('API breadth: compareKeys consistency guard on a multi-level tree', () 
 	// chokepoint for the whole API, so here we drive it through find / get / delete-by-key on a >= 3-level
 	// tree. POISON is never inserted; the comparator mishandles it (order-independent result), so only queries
 	// touching POISON trip the guard - every real-key operation stays valid.
+	// The tree is built with { checkComparator: true } so the antisymmetry probe runs on EVERY comparison: the
+	// default now only samples the first 32, which the multi-level build exhausts long before these deep POISON
+	// queries, so the exhaustive check is exactly what makes a deep guard fire. (See the BTreeOptions ticket.)
 	const POISON = -1;
 	const compare = (a: number, b: number): number => {
 		if (a === POISON || b === POISON) return -1;	// inconsistent: compare(x,POISON) === compare(POISON,x)
@@ -240,7 +243,7 @@ describe('API breadth: compareKeys consistency guard on a multi-level tree', () 
 	};
 
 	it('guards find / get and the delete-by-key flow without blocking valid operations', () => {
-		const tree = new BTree<number, number>(k => k, compare);
+		const tree = new BTree<number, number>(k => k, compare, { checkComparator: true });
 		const rng = lcg(SEED);
 		for (const k of shuffle([...Array(DEEP).keys()], rng)) tree.insert(k);	// keys 0..DEEP-1; POISON absent
 

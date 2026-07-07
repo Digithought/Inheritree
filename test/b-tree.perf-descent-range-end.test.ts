@@ -205,6 +205,10 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 		// The old loop called compareKeys (which calls compare twice) per yielded element. The new stop test is a
 		// pure position match, so a full unbounded scan should touch the comparator only for the O(1) start-past-end
 		// guard - a fixed count independent of how many elements are yielded.
+		// The exact count is 1: under the default (checkComparator off), compareKeys calls compare ONCE past the
+		// 32-comparison sample window, which the n-key build exhausts before reset(). (See the BTreeOptions ticket;
+		// with { checkComparator: true } the guard would cost 2, but that constant is beside the point here - what
+		// this proves is that the count does not grow with element count.)
 		const countingTree = (n: number): { tree: BTree<number, number>; comparisons: () => number; reset: () => void } => {
 			let compares = 0;
 			const tree = new BTree<number, number>(k => k, (a, b) => { compares++; return a < b ? -1 : a > b ? 1 : 0; });
@@ -212,23 +216,23 @@ describe('Perf descent + range end-by-position (§3.3 / §3.4)', () => {
 			return { tree, comparisons: () => compares, reset: () => { compares = 0; } };
 		};
 
-		it('a full ascending scan uses a fixed 2 comparisons regardless of element count', () => {
+		it('a full ascending scan uses a fixed 1 comparison regardless of element count', () => {
 			for (const n of [50, 500]) {
 				const { tree, comparisons, reset } = countingTree(n);
 				reset();
 				const out = rangeValues(tree, new KeyRange());
 				expect(out.length, `scanned all ${n}`).to.equal(n);
 				// first()/last() descend by edge (no compare); the loop's stop test is a position match (no compare);
-				// only the single up-front compareKeys guard runs, and compareKeys calls compare twice (consistency).
-				expect(comparisons(), `n=${n}: comparator calls independent of element count`).to.equal(2);
+				// only the single up-front compareKeys guard runs, one compare each past the sample window.
+				expect(comparisons(), `n=${n}: comparator calls independent of element count`).to.equal(1);
 			}
 		});
 
-		it('a full descending scan is likewise a fixed 2 comparisons', () => {
+		it('a full descending scan is likewise a fixed 1 comparison', () => {
 			const { tree, comparisons, reset } = countingTree(300);
 			reset();
 			expect(rangeValues(tree, new KeyRange(undefined, undefined, false)).length).to.equal(300);
-			expect(comparisons()).to.equal(2);
+			expect(comparisons()).to.equal(1);
 		});
 
 		it('a bounded scan cost is search + the guard, not per-element (does not grow with span)', () => {

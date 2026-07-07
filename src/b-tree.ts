@@ -23,6 +23,17 @@ export class InconsistentComparatorError extends Error {
 	constructor(message = "Inconsistent comparison function for given values") { super(message); this.name = "InconsistentComparatorError"; }
 }
 
+/** Optional, per-tree tuning of the two always-on safety costs.  Both default to the safe behavior. */
+export interface BTreeOptions {
+	/** Freeze entries on insert/update/upsert/merge to deter key mutation.  Default true (safe).
+	 *  Set false only for trusted bulk loads of never-mutated entries — the tree then offers no protection. */
+	freeze?: boolean;
+	/** Run the full per-comparison antisymmetry check on EVERY key comparison (the historical behavior).
+	 *  Default false.  When false, a cheap bounded sample of the first comparisons is checked instead, then the
+	 *  check drops off the hot path entirely. */
+	checkComparator?: boolean;
+}
+
 /**
  * Represents a lightweight B+(ish)Tree (data at leaves, but no linked list of leaves).
  * Allows for efficient storage and retrieval of data in a sorted manner.
@@ -33,15 +44,33 @@ export class BTree<TKey, TEntry> {
 	private _root: ITreeNode;
 	private _version = 0;
 
+	/** Number of leading comparisons antisymmetry-checked when checkComparator is false. */
+	private static readonly SampleCheckCount = 32;
+	private readonly _freeze: boolean;
+	private readonly _checkComparator: boolean;
+	/** Comparisons still to sample-check when checkComparator is false.  Decremented in compareKeys, then the check is skipped. */
+	private _sampleChecksRemaining: number;
+
 	/**
 	 * @param [compare=(a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0] a comparison function for keys.  The default uses < and > operators.
 	 * @param [keyFromEntry=(entry: TEntry) => entry as unknown as TKey] a function to extract the key from an entry.  The default assumes the key is the entry itself.
+	 * @param [options] optional per-tree tuning of the freeze / comparator-check safety costs.  See {@link BTreeOptions}.
 	 */
 	constructor(
 		private readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
 		private readonly compare = (a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0 as number,
+		options?: BTreeOptions,
 	) {
 		this._root = new LeafNode([]);
+		this._freeze = options?.freeze ?? true;
+		this._checkComparator = options?.checkComparator ?? false;
+		this._sampleChecksRemaining = this._checkComparator ? 0 : BTree.SampleCheckCount;
+	}
+
+	/** Freezes an entry to deter key mutation, unless freezing was disabled at construction. */
+	private freezeEntry(entry: TEntry): TEntry {
+		if (this._freeze) Object.freeze(entry);
+		return entry;
 	}
 
 	/** @returns a path to the first entry (on = false if no entries) */
@@ -130,7 +159,7 @@ export class BTree<TKey, TEntry> {
 	insert(entry: TEntry): Path<TKey, TEntry> {
 		const path = this.internalInsert(entry);
 		if (path.on) {
-			Object.freeze(entry);	// Ensure immutability (only once the entry is actually in the tree - a rejected duplicate is left untouched)
+			this.freezeEntry(entry);	// Ensure immutability (only once the entry is actually in the tree - a rejected duplicate is left untouched)
 			path.version = ++this._version;
 		}
 		return path;
@@ -148,7 +177,7 @@ export class BTree<TKey, TEntry> {
 		if (!path.on) {
 			throw new PathNotOnEntryError();
 		}
-		Object.freeze(newEntry);
+		this.freezeEntry(newEntry);
 		const result = this.internalUpdate(path, newEntry);
 		if (result[0].on) {
 			result[0].version = ++this._version;
@@ -161,7 +190,7 @@ export class BTree<TKey, TEntry> {
 	 * @returns path to the new entry.  on = true if existing; on = false if new. */
 	upsert(entry: TEntry): Path<TKey, TEntry> {
 		const path = this.find(this.keyFromEntry(entry));
-		Object.freeze(entry);
+		this.freezeEntry(entry);
 		if (path.on) {
 			path.leafNode.entries[path.leafIndex] = entry;
 		} else {
@@ -184,7 +213,7 @@ export class BTree<TKey, TEntry> {
 			// Note: updateAt already increments version, so don't double-increment here
 			return result;
 		} else {
-			this.internalInsertAt(path, Object.freeze(newEntry));
+			this.internalInsertAt(path, this.freezeEntry(newEntry));
 			path.on = true;
 			path.version = ++this._version;
 			return [path, false];
@@ -278,12 +307,24 @@ export class BTree<TKey, TEntry> {
 	/**
 	 * Invokes user-provided comperator to compare two keys.
 	 * Inner-loop code, so this doesn't do backflips to iron out ES's idiosyncrasies (undefined quirks, infinity, nulls, etc.), but does ensure deterministic comparison.
+	 *
+	 * The antisymmetry check (a second, reversed compare) runs on every comparison when the tree was
+	 * constructed with `{ checkComparator: true }`; otherwise it runs only for the first
+	 * {@link BTree.SampleCheckCount} comparisons (a cheap sample), then drops off the hot path entirely.
+	 * A subtly-inconsistent comparator that only misbehaves deep in a large tree can therefore slip past
+	 * the default sample — use `{ checkComparator: true }` for the exhaustive (historical) check.
+	 *
 	 * If you want to eak out more performance at the risk of corruption, you can override this method and omit the consistency check.
 	 */
 	protected compareKeys(a: TKey, b: TKey): number {
 		const result = this.compare(a, b);
-		if (result !== 0 && result === this.compare(b, a)) {
-			throw new InconsistentComparatorError();
+		if (this._checkComparator || this._sampleChecksRemaining > 0) {
+			if (result !== 0 && result === this.compare(b, a)) {
+				throw new InconsistentComparatorError();
+			}
+			if (!this._checkComparator && this._sampleChecksRemaining > 0) {
+				--this._sampleChecksRemaining;
+			}
 		}
 		return result;
 	}
