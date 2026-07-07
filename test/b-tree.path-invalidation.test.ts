@@ -33,12 +33,24 @@ describe('BTree Path Validation', () => {
 		expect(isValid).to.be.false;
 	});
 
-	it('path is invalidated after delete', () => {
+	// The path handed to a mutation method is the one exception to "any mutation invalidates a path" (see the
+	// Path class doc): deleteAt stamps the bumped version onto its own path so the caller can keep navigating.
+	it('path passed to delete stays valid and lands at the deleted entry\'s crack', () => {
 		populateTree([1, 2, 3]);
 		const path = tree.find(2);
-		tree.deleteAt(path); // Mutating operation
-		const isValid = tree.isValid(path);
-		expect(isValid).to.be.false;
+		const deleted = tree.deleteAt(path); // Mutating operation - stamps the new version onto this path
+		expect(deleted).to.be.true;
+		expect(path.on, 'the deleted position is now a crack').to.be.false;
+		expect(tree.isValid(path), 'the passed path remains usable - no re-find needed to keep going').to.be.true;
+	});
+
+	it('delete-while-iterating: after deleteAt(p), moveNext(p) advances onto the successor with no intervening find', () => {
+		populateTree([1, 2, 3]);
+		const path = tree.find(2);
+		expect(tree.deleteAt(path)).to.be.true;
+		tree.moveNext(path); // reuses the same path object - would throw InvalidPathError without the version stamp
+		expect(path.on).to.be.true;
+		expect(tree.at(path), 'recovers onto the entry that followed the deleted one (2 -> 3)').to.equal(3);
 	});
 
 	it('path is invalidated after update', () => {

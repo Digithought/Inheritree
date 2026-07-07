@@ -13,6 +13,11 @@ export class InvalidPathError extends Error {
 	constructor(message = "Path is invalid due to mutation of the tree") { super(message); this.name = "InvalidPathError"; }
 }
 
+/** Thrown when an operation requiring a path positioned on an entry is given a path in a crack (on === false). */
+export class PathNotOnEntryError extends Error {
+	constructor(message = "Path is not positioned on an entry") { super(message); this.name = "PathNotOnEntryError"; }
+}
+
 /** Thrown when the user comparator gives non-antisymmetric results for two keys (a bug in the comparator/input). */
 export class InconsistentComparatorError extends Error {
 	constructor(message = "Inconsistent comparison function for given values") { super(message); this.name = "InconsistentComparatorError"; }
@@ -123,27 +128,27 @@ export class BTree<TKey, TEntry> {
 	 * Added entries are frozen to ensure immutability
 	 * @returns path to the new (on = true) or conflicting (on = false) row. */
 	insert(entry: TEntry): Path<TKey, TEntry> {
-		Object.freeze(entry);	// Ensure immutability
 		const path = this.internalInsert(entry);
 		if (path.on) {
+			Object.freeze(entry);	// Ensure immutability (only once the entry is actually in the tree - a rejected duplicate is left untouched)
 			path.version = ++this._version;
 		}
 		return path;
 	}
 
 	/** Updates the entry at the given path to the given value.  Deletes and inserts if the key changes.
+	 * @throws PathNotOnEntryError if the given path is not positioned on an entry (on === false).
 	 * @returns path to resulting entry and whether it was an update (as opposed to an insert).
 	 * 	* on = true if update/insert succeeded.
 	 * 		* wasUpdate = true if updated; false if inserted.
 	 * 		* Returned path is on entry
-	 * 	* on = false if update/insert failed.
-	 * 		* wasUpdate = true, given path is not on an entry
-	 * 		* else newEntry's new key already present; returned path is "near" existing entry */
+	 * 	* on = false if the insert failed: newEntry's new key already present; returned path is "near" the existing entry (wasUpdate = false) */
 	updateAt(path: Path<TKey, TEntry>, newEntry: TEntry): [path: Path<TKey, TEntry>, wasUpdate: boolean] {
 		this.validatePath(path);
-		if (path.on) {
-			Object.freeze(newEntry);
+		if (!path.on) {
+			throw new PathNotOnEntryError();
 		}
+		Object.freeze(newEntry);
 		const result = this.internalUpdate(path, newEntry);
 		if (result[0].on) {
 			result[0].version = ++this._version;
@@ -194,7 +199,10 @@ export class BTree<TKey, TEntry> {
 		this.validatePath(path);
 		const result = this.internalDelete(path);
 		if (result) {
-			++this._version;
+			// Stamp the bumped version onto the path (mirror insert/updateAt/upsert): internalDelete keeps this path
+			// positionally coherent at a crack whose leafIndex now points at the deleted entry's successor, so a
+			// subsequent moveNext advances straight onto it - enabling delete-while-iterating with no re-find.
+			path.version = ++this._version;
 		}
 		return result;
 	}

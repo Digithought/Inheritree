@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { BTree, NodeCapacity } from '../src/index.js';
+import { BTree, NodeCapacity, PathNotOnEntryError } from '../src/index.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants } from './helpers/invariants.js';
 import { lcg, lcgInt, shuffle } from './helpers/rng.js';
@@ -401,5 +401,46 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			expect(finalEntries.map(e => e.id)).to.deep.equal([...shadow.keys()].sort((a, b) => a - b));
 			for (const e of finalEntries) expect(e.value).to.equal(shadow.get(e.id));
 		}).timeout(20000);
+	});
+
+	// Operation result / side-effect contract: each op must report what it actually did. A rejected insert must
+	// not leave a permanent side effect on the caller's object; a no-op update must not masquerade as success.
+	describe('operation result / side-effect contract', () => {
+		it('2.3 a successful insert freezes the entry; a rejected duplicate leaves the caller\'s object untouched', () => {
+			const dict = new BTree<number, Entry>(e => e.id);
+			const first = { id: 1, value: 'a' };
+			expect(dict.insert(first).on, 'first insert succeeds').to.be.true;
+			expect(Object.isFrozen(first), 'a successfully inserted entry is frozen').to.be.true;
+
+			const dup = { id: 1, value: 'b' };
+			expect(dict.insert(dup).on, 'duplicate key is rejected').to.be.false;
+			expect(Object.isFrozen(dup), 'a rejected duplicate must NOT be frozen - nothing was added').to.be.false;
+			expect(dict.get(1)!.value, 'the original entry is untouched').to.equal('a');
+		});
+
+		it('2.4 updateAt on an off-entry (crack) path throws PathNotOnEntryError and writes nothing', () => {
+			const tree = new BTree<number, number>();
+			tree.insert(1);
+			tree.insert(9);
+			const crack = tree.find(5);	// between 1 and 9 -> valid path, but not on an entry
+			expect(crack.on).to.be.false;
+			expect(() => tree.updateAt(crack, 5)).to.throw(PathNotOnEntryError);
+			expect(tree.get(5), 'no phantom entry written').to.be.undefined;
+		});
+
+		it('2.4 a same-key update still reports wasUpdate=true; a key-change still reports wasUpdate=false', () => {
+			const dict = new BTree<number, Entry>(e => e.id);
+			dict.insert({ id: 1, value: 'a' });
+			dict.insert({ id: 2, value: 'b' });
+
+			const [samePath, wasUpdate] = dict.updateAt(dict.find(1), { id: 1, value: 'A' });
+			expect(wasUpdate, 'same key -> genuine update').to.be.true;
+			expect(dict.at(samePath)!.value).to.equal('A');
+
+			const [movedPath, wasUpdate2] = dict.updateAt(dict.find(2), { id: 3, value: 'C' });
+			expect(wasUpdate2, 'key change -> reported as insert, not update').to.be.false;
+			expect(dict.at(movedPath)!.id).to.equal(3);
+			expect(dict.get(2), 'old key removed').to.be.undefined;
+		});
 	});
 });
