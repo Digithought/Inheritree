@@ -20,12 +20,9 @@ export class LeafNode<TEntry> {
 	) { }
 
 	clone(newTree: BTree<any, any>): LeafNode<TEntry> {
-		// NOTE: structuredClone deep-copies entries and does NOT preserve Object.freeze, so entries a
-		// copy-on-write child inherited-but-never-rewrote become UNFROZEN copies once their leaf is cloned.
-		// The base keeps its own frozen originals (isolation holds); only the child's shallow freeze guard is
-		// absent on those cloned neighbors. Fine today (freeze is best-effort/non-transitive per readme.md); if
-		// the child-side freeze guard must survive cloning, re-freeze here under the owner's freeze option.
-		return new LeafNode(structuredClone(this.entries), newTree);
+		// Shallow copy: entries are shared by reference across base/derived trees (same contract
+		// as the rebalance/merge paths), only the array itself is duplicated for structural isolation.
+		return new LeafNode(this.entries.slice(), newTree);
 	}
 }
 
@@ -37,6 +34,6 @@ export class BranchNode<TKey, TEntry> {
 	) { }
 
 	clone(newTree: BTree<any, any>): BranchNode<TKey, TEntry> {
-		return new BranchNode(structuredClone(this.partitions), [...this.nodes], newTree);
+		return new BranchNode(this.partitions.slice(), [...this.nodes], newTree);
 	}
 }
