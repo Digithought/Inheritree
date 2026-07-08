@@ -13,6 +13,9 @@ export type ITreeNode = TreeNode<any, any>;
 // retain its base chain because nodes never point at trees to begin with. Manually-constructed nodes
 // in non-COW tests have no owner, and none is needed there (the owner is only read when a base
 // tree exists).
+// NOTE: the token is a `Symbol()` — unique per tree and NOT serializable. There is no persistence path
+// today, so nothing breaks. If serialization/structured-clone of nodes is ever added, the owner must be
+// re-established on load (re-stamp reachable nodes with the loading tree's `owner`), not round-tripped.
 
 export class LeafNode<TEntry> {
 	constructor(
