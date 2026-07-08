@@ -127,6 +127,28 @@ describe('Multi-level mutation ops (upsert / merge / updateAt)', () => {
 			expect(dict.getCount()).to.equal(300);
 			assertTreeInvariants(dict);
 		});
+
+		it('pins the at(upsert(...)) footgun: undefined on fresh insert, the entry on update', () => {
+			// Documented trap (src/b-tree.ts upsert JSDoc): on a fresh insert, upsert's returned path sits
+			// on the crack BEFORE the new row, so at() on it is undefined - the caller must step off the
+			// crack (next()) or use get() to read the new entry. On update, the path IS on the entry.
+			const tree = new BTree<number, number>();
+			for (const id of seq(0, 10)) tree.insert(id);
+
+			const NEW = 100;
+			const insertResult = tree.upsert(NEW);
+			expect(insertResult.on).to.be.false;
+			expect(tree.at(insertResult), 'at() on a fresh-insert upsert path is undefined - the footgun').to.equal(undefined);
+			expect(tree.at(tree.next(insertResult))).to.equal(NEW);
+			expect(tree.get(NEW)).to.equal(NEW);
+
+			const dict = new BTree<number, Entry>(e => e.id);
+			for (const id of seq(0, 10)) dict.insert({ id, value: `v${id}` });
+			const id = 5;
+			const updateResult = dict.upsert({ id, value: 'X' });
+			expect(updateResult.on).to.be.true;
+			expect(dict.at(updateResult)).to.deep.equal({ id, value: 'X' });
+		});
 	});
 
 	describe('merge', () => {

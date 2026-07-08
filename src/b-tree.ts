@@ -433,7 +433,13 @@ export class BTree<TKey, TEntry> {
 
 	/** Inserts the entry if it doesn't exist, or updates it if it does.
 	 * The entry is frozen to ensure immutability.
-	 * @returns path to the new entry.  on = true if existing; on = false if new. */
+	 * @returns path to the affected row. on = true if an existing entry was updated (path sits ON the
+	 * 	updated row); on = false if the entry was newly inserted (path sits on the crack BEFORE the new
+	 * 	row, not on it). This is the inverse of insert's on-flag and the opposite of merge, which sets
+	 * 	on = true on insert too.
+	 * 	WARNING: on a fresh insert, `tree.at(tree.upsert(x))` returns undefined - the returned path is not
+	 * 	on the new entry. To read the freshly-inserted row, step off the crack first:
+	 * 	`tree.at(tree.next(path))` (or use `tree.get(key)`). */
 	upsert(entry: TEntry): Path<TKey, TEntry> {
 		const path = this.find(this.keyFromEntry(entry)) as PathImpl<TKey, TEntry>;
 		this.freezeEntry(entry);
@@ -443,6 +449,10 @@ export class BTree<TKey, TEntry> {
 		} else {
 			this.internalInsertAt(path, entry);
 		}
+		// NOTE: upsert returns on=false on insert / on=true on update (inverse of insert, opposite of
+		// merge) - a deliberate upstream contract kept for merge-cleanliness. If the fork ever depends
+		// on upsert's result positionally, revisit aligning with merge (a [path, wasUpdate] result) -
+		// see ticket 6 (upsert-asymmetry-harden-docs).
 		path.version = ++this._version;
 		return path;
 	}
