@@ -190,12 +190,12 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			const base = new BTree<number, number>(idFn, cmp);
 			const child = new BTree<number, number>(idFn, cmp, base);
 
-			const orphanClone = new LeafNode<number>([200, 201], child);				// child-owned
-			const baseBranch = new BranchNode<number, number>([], [orphanClone], base);			// base-owned, but holds a child clone
+			const orphanClone = new LeafNode<number>([200, 201], child.owner);				// child-owned
+			const baseBranch = new BranchNode<number, number>([], [orphanClone], base.owner);			// base-owned, but holds a child clone
 			const childRoot = new BranchNode<number, number>(
 				[100],
-				[new LeafNode<number>([0, 1], child), baseBranch],						// child-owned root
-				child,
+				[new LeafNode<number>([0, 1], child.owner), baseBranch],						// child-owned root
+				child.owner,
 			);
 			(child as any)['_root'] = childRoot;
 			expect(() => assertOwnershipInvariant(child, base)).to.throw(/connectivity/);
@@ -207,16 +207,16 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			const base = new BTree<number, number>(idFn, cmp);
 			const child = new BTree<number, number>(idFn, cmp, base);
 
-			const shared = new LeafNode<number>([5, 6], child);							// child-owned (mutable)
+			const shared = new LeafNode<number>([5, 6], child.owner);							// child-owned (mutable)
 			(child as any)['_root'] = new BranchNode<number, number>(
 				[100],
-				[shared, new LeafNode<number>([100, 101], base)],
-				child,
+				[shared, new LeafNode<number>([100, 101], base.owner)],
+				child.owner,
 			);
 			(base as any)['_root'] = new BranchNode<number, number>(
 				[100],
-				[shared, new LeafNode<number>([100, 101], base)],						// same `shared` object
-				base,
+				[shared, new LeafNode<number>([100, 101], base.owner)],						// same `shared` object
+				base.owner,
 			);
 			expect(() => assertOwnershipInvariant(child, base)).to.throw(/shared mutable node/);
 		});

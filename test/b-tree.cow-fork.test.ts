@@ -448,7 +448,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			const chain = nodeChainToKey(c4, c4Ins[0]);
 			expect(chain.length, 'rootward spine spans several node levels').to.be.greaterThanOrEqual(depthOf(base.root) + 1);
 			for (let level = 0; level < chain.length; level++) {
-				expect(chain[level].tree, `spine node at level ${level} is owned by the deepest child`).to.equal(c4);
+				expect(chain[level].owner, `spine node at level ${level} is owned by the deepest child`).to.equal(c4.owner);
 			}
 
 			// Whole-chain ownership + every ancestor pristine (key set AND value set), validated against the
@@ -511,7 +511,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			// In c4 (before its first write) the target leaf is INHERITED — the very base-owned node, shared
 			// up through the whole chain.
 			expect(leafForKey(c4, targetKey), 'c4 inherits the base-owned target leaf').to.equal(targetLeaf);
-			expect(targetLeaf.tree, 'target leaf is base-owned').to.equal(base);
+			expect(targetLeaf.owner, 'target leaf is base-owned').to.equal(base.owner);
 			expect(targetLeaf.entries.length, 'target leaf is at minimum fill (a single delete underflows it)').to.equal(NodeCapacity >>> 1);
 
 			const p = c4.find(targetKey);
@@ -520,10 +520,10 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 
 			// The delete cloned the touched leaf (and its rootward spine) into c4; the base's node is untouched.
 			expect(c4.get(targetKey), 'deleted key gone from c4').to.equal(undefined);
-			expect(leafForKey(c4, targetKey).tree, 'the rebalanced leaf is now child-owned in c4').to.equal(c4);
-			expect(c4.root.tree, 'c4 owns its root after the rootward clone').to.equal(c4);
+			expect(leafForKey(c4, targetKey).owner, 'the rebalanced leaf is now child-owned in c4').to.equal(c4.owner);
+			expect(c4.root.owner, 'c4 owns its root after the rootward clone').to.equal(c4.owner);
 			expect(leafForKey(base, targetKey), 'base still routes to the very same node').to.equal(targetLeaf);
-			expect(targetLeaf.tree, 'base target leaf still base-owned').to.equal(base);
+			expect(targetLeaf.owner, 'base target leaf still base-owned').to.equal(base.owner);
 			expect(targetLeaf.entries.length, 'base target leaf untouched at min fill').to.equal(NodeCapacity >>> 1);
 
 			// Functional + structural + whole-chain ownership; every ancestor pristine against its snapshot.
@@ -578,7 +578,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			// Before the fix this dropped an entire intermediate subtree from the child (and aliased the
 			// sibling), so the live set lost ~32 keys and iteration looped on a corrupted spine.
 			expect(liveIds(cow), 'child lost EXACTLY the one deleted key').to.deep.equal(ids.filter(k => k !== targetKey));
-			expect(cow.root.tree, 'child owns its cloned root').to.equal(cow);
+			expect(cow.root.owner, 'child owns its cloned root').to.equal(cow.owner);
 			assertTreeInvariants(cow);
 			assertOwnershipInvariant(cow, base, snap);
 			expect(liveSet(base), 'base value-pristine').to.deep.equal(entries);

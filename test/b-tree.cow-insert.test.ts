@@ -205,7 +205,7 @@ describe('BTree COW insert splitting', () => {
 		if (opts.expectChildDeeperThanBase) {
 			expect(depthOf(cow.root), 'child root split deeper than the base').to.be.greaterThan(baseDepth);
 			expect(depthOf(base.root), 'base depth unchanged by child split').to.equal(baseDepth);
-			expect(cow.root.tree, 'child owns its (split) root').to.equal(cow);
+			expect(cow.root.owner, 'child owns its (split) root').to.equal(cow.owner);
 		}
 
 		if (opts.expectNonRootBranchSplit) {

@@ -59,6 +59,13 @@ export interface BTreeOptions {
  * @template TKey The type of keys used for indexing the entries.  This might be an element of TEntry, or TEntry itself.
  */
 export class BTree<TKey, TEntry> {
+	/** This tree's identity token, stamped onto every node it creates or clones (see {@link nodes} owner).
+	 * A node belongs to this tree iff `node.owner === this.owner`.  A bare `Symbol` rather than a `this`
+	 * back-reference is deliberate: it answers the O(1) ownership question without letting a shared node pin
+	 * the whole owning tree — and transitively its entire base chain — alive past {@link clearBase}/{@link clear}.
+	 * A class-field initializer, so it is set before the constructor body runs and is available at every
+	 * node-creation site (including the lazy {@link root} getter). */
+	readonly owner = Symbol();
 	/** Local root, if this tree owns one.  A copy-on-write child with no local writes leaves this unset and
 	 * resolves through {@link root} to its base's root; a standalone tree creates its root lazily on first use. */
 	private _root?: TreeNode<TKey, TEntry>;
@@ -157,7 +164,7 @@ export class BTree<TKey, TEntry> {
 			return this._baseRoot ??= this.base.root;	// resolved once; a deep chain collapses to O(1) after warm-up
 		}
 
-		this._root = new LeafNode<TEntry>([], this);
+		this._root = new LeafNode<TEntry>([], this.owner);
 		return this._root;
 	}
 
@@ -270,7 +277,7 @@ export class BTree<TKey, TEntry> {
 		for (const size of BTree.chunkSizes(n)) {
 			const chunk = entries.slice(offset, offset + size);
 			offset += size;
-			level.push({ node: new LeafNode<TEntry>(chunk, tree), min: keyOf(chunk[0]) });
+			level.push({ node: new LeafNode<TEntry>(chunk, tree.owner), min: keyOf(chunk[0]) });
 		}
 
 		// Build branch levels up, grouping the current level's nodes (same chunking + redistribution) until one
@@ -284,7 +291,7 @@ export class BTree<TKey, TEntry> {
 				start += size;
 				const nodes = group.map(child => child.node);
 				const partitions = group.slice(1).map(child => child.min);
-				parent.push({ node: new BranchNode<TKey, TEntry>(partitions, nodes, tree), min: group[0].min });
+				parent.push({ node: new BranchNode<TKey, TEntry>(partitions, nodes, tree.owner), min: group[0].min });
 			}
 			level = parent;
 		}
@@ -555,7 +562,7 @@ export class BTree<TKey, TEntry> {
 	 * On a copy-on-write child this also detaches the base: an empty tree shares nothing, so there is nothing
 	 * left to inherit (the base itself is untouched, as always). */
 	clear(): void {
-		this._root = new LeafNode<TEntry>([], this);
+		this._root = new LeafNode<TEntry>([], this.owner);
 		this.base = undefined;	// COW: an empty tree inherits nothing; dropping the pointer frees the base chain
 		this._baseRoot = undefined;	// detached like clearBase: drop the cached base-root reference (unread once base is gone, but don't pin it)
 		this._count = 0;
@@ -883,7 +890,7 @@ export class BTree<TKey, TEntry> {
 			--branchIndex;
 		}
 		if (split) {
-			const newBranch = new BranchNode<TKey, TEntry>([split.key], [this.root, split.right], this);
+			const newBranch = new BranchNode<TKey, TEntry>([split.key], [this.root, split.right], this.owner);
 			this._root = newBranch;
 			path.branches.unshift(new PathBranch(newBranch, split.indexDelta));
 		}
@@ -931,7 +938,7 @@ export class BTree<TKey, TEntry> {
 		const moveEntries = leaf.entries.splice(midIndex);
 
 		// New node
-		const newLeaf = new LeafNode(moveEntries, this);
+		const newLeaf = new LeafNode(moveEntries, this.owner);
 
 		const delta = index < midIndex ? 0 : 1;
 		if (delta) {	// new node goes into the new leaf
@@ -963,7 +970,7 @@ export class BTree<TKey, TEntry> {
 		const moveNodes = mutable.nodes.splice(midIndex);
 
 		// New node
-		const newBranch = new BranchNode<TKey, TEntry>(movePartitions, moveNodes, this);
+		const newBranch = new BranchNode<TKey, TEntry>(movePartitions, moveNodes, this.owner);
 
 		const delta = pathBranch.index < midIndex ? 0 : 1;
 		if (delta) { // If new entry in new node, repoint and slide the index
@@ -1118,9 +1125,9 @@ export class BTree<TKey, TEntry> {
 	 * (base-less) tree or an already-owned leaf allocates nothing (F3). */
 	private mutableLeaf(path: PathImpl<TKey, TEntry>, sib?: LeafNode<TEntry>, delta = 0): LeafNode<TEntry> {
 		const leaf = sib ?? path.leafNode;
-		if (this.base && leaf.tree !== this) {
+		if (this.base && leaf.owner !== this.owner) {
 			const map = new Map<TreeNode<TKey, TEntry>, TreeNode<TKey, TEntry>>();
-			const newNode = leaf.clone(this);
+			const newNode = leaf.clone(this.owner);
 			map.set(leaf, newNode);
 			// Build the rootward spine only now that a clone is required.  The main-spine case reuses
 			// path.branches directly; the sibling case needs an index-shifted copy so replaceRootward links the
@@ -1155,7 +1162,7 @@ export class BTree<TKey, TEntry> {
 		// NOTE: the owned-branch fast path is correct ONLY while ownership stays upward-closed (an owned node never
 		// sits beneath a base-owned ancestor - assertOwnershipInvariant check 1). If that invariant is ever
 		// weakened, this would skip a needed clone and corrupt the derived tree; revisit here first.
-		if (!this.base || branch.tree === this) {
+		if (!this.base || branch.owner === this.owner) {
 			return branch;
 		}
 		// Clone required: build the segment list now.  Sibling => the index-shifted spine addressing the sibling
@@ -1172,7 +1179,7 @@ export class BTree<TKey, TEntry> {
 	private replaceRootward(prior: TreeNode<TKey, TEntry> | undefined, segments: PathBranch<TKey, TEntry>[], map: Map<TreeNode<TKey, TEntry>, TreeNode<TKey, TEntry>>) {
 		for (let i = segments.length - 1; i >= 0; --i) {
 			const seg = segments[i];
-			if (seg.node.tree === this) {
+			if (seg.node.owner === this.owner) {
 				// Ancestor is already owned by this tree: link the freshly-cloned child into it
 				// rather than returning unconditionally, or the clone is orphaned and the owned
 				// ancestor keeps pointing at the stale base node (dropped writes / phantom keys).
@@ -1182,7 +1189,7 @@ export class BTree<TKey, TEntry> {
 				}
 				return;
 			}
-			const newBranch = seg.node.clone(this);
+			const newBranch = seg.node.clone(this.owner);
 			if (prior) {
 				newBranch.nodes[seg.index] = prior;
 			}

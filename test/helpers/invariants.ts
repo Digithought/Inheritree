@@ -217,7 +217,8 @@ export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, op
 // COW ownership invariant (Inheritree-specific)
 // ---------------------------------------------------------------------------------------------------
 //
-// Every node carries a `.tree` owner (src/nodes.ts). A copy-on-write child `new BTree(keyFn, cmp, base)`
+// Every node carries an `.owner` token (src/nodes.ts) — its owning tree's identity `Symbol`. A
+// copy-on-write child `new BTree(keyFn, cmp, base)`
 // shares its base's nodes until it needs to mutate one, at which point it clones the target and re-links
 // the clone rootward (`mutableLeaf`/`mutableBranch`/`replaceRootward`, src/b-tree.ts). The escaped
 // COW-delete bug left "an owned ancestor pointing at a stale base node" — i.e. the clone-rootward
@@ -335,7 +336,7 @@ export function sharedReachableNodes<TKey, TEntry>(a: BTree<TKey, TEntry>, b: BT
  *      chain `base -> c1 -> c2 ...`, validating `c2` against an untouched `c1`) has no local root and is
  *      validated by identity/keys alone; its structure is its own base's invariant.
  *
- * Reaches the child's and base's roots through the public `root` getter and node `.tree` owners, so it is
+ * Reaches the child's and base's roots through the public `root` getter and node `.owner` tokens, so it is
  * key-type-agnostic. Note that the dropped-write manifestation of the original bug (an *orphaned*,
  * unreachable clone) is caught functionally by `assertTreeInvariants(child)` plus the base-immutability
  * check here — pair the two in COW tests.
@@ -353,7 +354,7 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 
 	// --- Check 1: ownership is upward-closed from the child's root (connectivity). ---
 	const visitConnectivity = (node: ITreeNode, crossedToBase: boolean, path: string): void => {
-		const childOwned = node.tree === child;
+		const childOwned = node.owner === child.owner;
 		if (crossedToBase && childOwned) {
 			throw new Error(
 				`Ownership violation (connectivity) at ${path}: a node owned by the child is reachable beneath a base-owned ancestor; the copy-on-write spine must be connected from the root.`,
@@ -371,7 +372,7 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 	// --- Check 2: no shared *mutable* node. ---
 	const baseReachable = collectReachableNodes(baseRoot);
 	const visitShared = (node: ITreeNode, path: string): void => {
-		if (node.tree === child && baseReachable.has(node)) {
+		if (node.owner === child.owner && baseReachable.has(node)) {
 			throw new Error(
 				`Ownership violation (shared mutable node) at ${path}: a child-owned node is also reachable from the base; a child write would mutate the base in place.`,
 			);

@@ -5,7 +5,7 @@ Lightweight, fast in-memory B+Tree in TypeScript with copy-on-write (COW) inheri
 ## Layout
 
 - `src/b-tree.ts` — `BTree<TKey, TEntry>` class; all public API, balancing logic, and the COW layer (`root` getter, `clearBase`, `mutableLeaf`/`mutableBranch`/`replaceRootward`). `NodeCapacity = 64` (fixed, not configurable).
-- `src/nodes.ts` — `LeafNode` (holds entries) and `BranchNode` (partitions + child nodes); each node carries an optional `tree` owner reference and a `clone` method for COW. Data lives only in leaves; no leaf linked-list.
+- `src/nodes.ts` — `LeafNode` (holds entries) and `BranchNode` (partitions + child nodes); each node carries an optional `owner` token (its owning tree's identity `Symbol`, not a back-reference to the `BTree`) and a `clone` method for COW. Carrying a token rather than the tree keeps a shared node from pinning the whole owning tree — and its base chain — alive. Data lives only in leaves; no leaf linked-list.
 - `src/path.ts` — the cursor. `Path` is the public, insulated **interface** (only `on`, `isEqual`, `clone`); the concrete class `PathImpl` (`branches`, `leafNode`, `leafIndex`, `on`, `version`) and `PathBranch` stay module-internal. Only `Path` is re-exported from `index.ts`; `b-tree.ts` and white-box tests import `PathImpl` directly and cross the boundary with a `path as PathImpl` cast.
 - `src/key-range.ts` — `KeyRange` for `range()`.
 - `src/index.ts` — barrel export.

@@ -176,7 +176,7 @@ describe('BTree COW × merged tree capabilities', () => {
 			const baseEntries = rows.map(e => ({ ...e }));
 			// The loader owner-stamps every node it builds — the precondition COW relies on to know a shared
 			// node still belongs to the base and must be cloned before the child writes it.
-			expect(base.root.tree, 'bulk-loaded root is owned by the base').to.equal(base);
+			expect(base.root.owner, 'bulk-loaded root is owned by the base').to.equal(base.owner);
 
 			const child = new BTree<number, Entry>(keyOf, cmp, base);
 			const snap = snapshotBase(base);
@@ -194,8 +194,8 @@ describe('BTree COW × merged tree capabilities', () => {
 			// The child cloned a private spine out of the bulk-loaded nodes: it owns its root and the leaves it
 			// wrote. If the loader had mis-stamped ownership, the child would have skipped cloning and mutated the
 			// base in place — which assertOwnershipInvariant's base-immutability check (below) would then catch.
-			expect(child.root.tree, 'child owns its cloned root after writing').to.equal(child);
-			for (const id of ins) expect(leafForKey(child, id).tree, `inserted ${id} lands in a child-owned leaf`).to.equal(child);
+			expect(child.root.owner, 'child owns its cloned root after writing').to.equal(child.owner);
+			for (const id of ins) expect(leafForKey(child, id).owner, `inserted ${id} lands in a child-owned leaf`).to.equal(child.owner);
 
 			const expected = [...baseIds, ...ins].filter(k => !del.includes(k)).sort(cmp);
 			expect(liveIds(child), 'child live set is bulk-load ∪ inserts − deletes').to.deep.equal(expected);
@@ -451,11 +451,11 @@ describe('BTree COW × merged tree capabilities', () => {
 
 			// Force a clone of a base-owned leaf by writing a fresh interior key into it.
 			const K = 1505;	// gap between base 1500 and 1510
-			expect(leafForKey(child, K).tree, 'target leaf is base-owned before the write').to.equal(base);
+			expect(leafForKey(child, K).owner, 'target leaf is base-owned before the write').to.equal(base.owner);
 			expect(child.insert({ id: K, value: 'cloned', tag: 'c' }).on, `insert ${K}`).to.equal(true);
 
 			const clonedLeaf = leafForKey(child, K);
-			expect(clonedLeaf.tree, 'the COW clone is owner-stamped to the child').to.equal(child);
+			expect(clonedLeaf.owner, 'the COW clone is owner-stamped to the child').to.equal(child.owner);
 			expect(clonedLeaf, 'the clone is not the base leaf').to.not.equal(leafForKey(base, K));
 			expect(Object.isFrozen(child.get(K)), 'the entry stored into the clone is unfrozen').to.equal(false);
 
@@ -482,12 +482,12 @@ describe('BTree COW × merged tree capabilities', () => {
 			const path = child.find(K);
 			expect(path.on, 'target key present in child').to.equal(true);
 			// The path descends through INHERITED (base-owned) nodes: nothing is cloned yet.
-			expect((path as any).leafNode.tree, 'path is on a base-owned (inherited) leaf before the delete').to.equal(base);
+			expect((path as any).leafNode.owner, 'path is on a base-owned (inherited) leaf before the delete').to.equal(base.owner);
 
 			// deleteAt clones the leaf + rootward spine into the child, remaps THIS path onto the clones
 			// (mutableLeaf -> path.remap), and re-stamps the bumped version onto that same remapped path.
 			expect(child.deleteAt(path), `delete ${K}`).to.equal(true);
-			expect((path as any).leafNode.tree, 'the delete remapped the path onto the child-owned clone').to.equal(child);
+			expect((path as any).leafNode.owner, 'the delete remapped the path onto the child-owned clone').to.equal(child.owner);
 
 			// No intervening find: moveNext on the remapped+re-stamped path recovers onto the deleted key's successor.
 			child.moveNext(path);

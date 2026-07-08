@@ -212,9 +212,52 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 			// The defining guarantees of clearBase: the child's key set is untouched and the dependency is gone.
 			expect(liveIds(child), 'clearBase preserves the child key set').to.deep.equal(idsBefore);
 			expect(baseOf(child), 'clearBase drops the base pointer').to.equal(undefined);
-			expect((child.root as ITreeNode).tree, 'a written child owns its pinned root after clearBase').to.equal(child);
+			expect((child.root as ITreeNode).owner, 'a written child owns its pinned root after clearBase').to.equal(child.owner);
 			assertTreeInvariants(child);
 			expect(liveSet(child), 'child still matches shadow after clearBase').to.deep.equal(expected);
+		});
+
+		// The structural point of the owner-TOKEN change (ticket 7): a node stamps its owning tree's identity
+		// with a bare `Symbol`, never a back-reference to the `BTree` object. So a shared base node — one the
+		// child inherited without cloning — cannot pin the base object (and transitively the whole base chain)
+		// alive once the child detaches. This is a direct object-graph assertion (a node carries ONLY a token),
+		// not a GC test: under the old per-node `.tree` field the same shared node would still point straight at
+		// the base object right here.
+		it('a shared node carries only an owner TOKEN, never a BTree back-reference — a detached child cannot pin its former base', () => {
+			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
+			const baseToken = base.owner;
+
+			// Derive a child and write ONE key: it clones only the spine to that key's leaf and keeps sharing
+			// every untouched base subtree by identity.
+			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			expect(child.insert({ id: 55, value: 'c_55', tag: 'c' }).on, 'child insert 55').to.equal(true);
+
+			// A node physically shared between child and base (an untouched, inherited base subtree). It is
+			// base-owned: its owner token is the base's, proving the child never cloned it.
+			const shared = sharedReachableNodes(child, base);
+			expect(shared.length, 'the written child still shares untouched base nodes').to.be.greaterThan(0);
+			const sharedNode = shared[0];
+			expect(sharedNode.owner, 'shared node is stamped with the base owner token').to.equal(baseToken);
+
+			// Detach. With tokens this cannot leave any live node pointing back at a BTree object.
+			child.clearBase();
+			expect(baseOf(child), 'child detached from its base').to.equal(undefined);
+
+			// Structural retention proof: EVERY node still reachable from the flattened child (the shared base
+			// nodes included) carries only a Symbol owner and exposes NO property that is a BTree instance. The
+			// `'tree' in node` guard is the regression anchor — re-introducing a node->tree field trips it.
+			for (const node of reachableNodesOf(child)) {
+				expect(typeof node.owner === 'symbol' || node.owner === undefined, 'owner is a Symbol token (or absent), never a tree').to.equal(true);
+				expect('tree' in node, 'node has no legacy .tree back-reference').to.equal(false);
+				for (const value of Object.values(node)) {
+					expect(value, 'no node property is a BTree instance').to.not.be.instanceOf(BTree);
+				}
+			}
+
+			// The inherited shared node specifically: still just the base identity token, not the base object.
+			expect(typeof sharedNode.owner, 'shared node owner is a bare Symbol token').to.equal('symbol');
+			expect(sharedNode.owner, 'shared node still carries ONLY the base identity token, not the base object').to.equal(baseToken);
+			assertTreeInvariants(child);
 		});
 
 		it('after clearBase, a follow-up op batch on the flattened child stays internally correct', () => {

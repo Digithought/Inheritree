@@ -106,7 +106,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 			const node = stack.pop()!;
 			if (seen.has(node)) continue;
 			seen.add(node);
-			if (node.tree === owner) n++;
+			if (node.owner === owner.owner) n++;
 			if (node instanceof BranchNode) {
 				for (const c of (node as BranchNode<number, any>).nodes) stack.push(c);
 			}
@@ -208,7 +208,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 		}
 		const fullLeaf = leafForKey(base, fullHint);
 		expect(fullLeaf.entries.length, 'engineered a full base leaf').to.equal(NodeCapacity);
-		expect(fullLeaf.tree, 'full leaf is base-owned').to.equal(base);
+		expect(fullLeaf.owner, 'full leaf is base-owned').to.equal(base.owner);
 
 		const freshInFull = lo + 0.5;	// inside (lo, lo+1), not one of the k/(need+1) fills
 		expect(base.get(freshInFull), 'split-trigger key absent from base').to.equal(undefined);
@@ -222,7 +222,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 		const minFillLeaves = enumerateLeaves(base).filter(l => l !== fullLeaf && l.entries.length === (NodeCapacity >>> 1));
 		expect(minFillLeaves.length, 'a base-owned min-fill interior leaf exists for the delete side').to.be.greaterThan(0);
 		const minLeaf = minFillLeaves[minFillLeaves.length - 1];
-		expect(minLeaf.tree, 'delete-side leaf is base-owned').to.equal(base);
+		expect(minLeaf.owner, 'delete-side leaf is base-owned').to.equal(base.owner);
 		const minFillKey = keyOf(minLeaf.entries[minLeaf.entries.length >>> 1]);	// an interior key of that leaf
 
 		assertTreeInvariants(base);
@@ -247,7 +247,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 			expect(cow.get(newId), 'child sees the upserted entry').to.deep.equal({ id: newId, value: 'up_new', origin: 'derived' });
 			expect(base.get(newId), 'base never gained the key').to.equal(undefined);
-			expect(leafForKey(cow, newId).tree, 'the touched leaf is now child-owned').to.equal(cow);
+			expect(leafForKey(cow, newId).owner, 'the touched leaf is now child-owned').to.equal(cow.owner);
 
 			expect(liveIds(cow), 'live set is base ∪ {newId}').to.deep.equal([...ids, newId].sort(cmp));
 			assertTreeInvariants(cow);
@@ -265,7 +265,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 			expect(cow.get(freshInFull), 'child sees the split-causing upsert').to.deep.equal({ id: freshInFull, value: 'up_split', origin: 'derived' });
 
 			expect(liveIds(cow), 'live set is base ∪ {freshInFull}').to.deep.equal([...ids, freshInFull].sort(cmp));
-			expect(cow.root.tree, 'child owns its root after the split cascaded').to.equal(cow);
+			expect(cow.root.owner, 'child owns its root after the split cascaded').to.equal(cow.owner);
 			assertTreeInvariants(cow);
 			assertOwnershipInvariant(cow, base, snap);
 			expect(liveIds(base), 'base pristine after the split happened in the child only').to.deep.equal(ids);
@@ -497,11 +497,11 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 			// base's still-full leaf, and is itself below capacity (the 64-entry leaf was divided). The base's
 			// original leaf is untouched at capacity. This is robust regardless of how the delete side rebalances.
 			const splitLeaf = leafForKey(cow, freshInFull);
-			expect(splitLeaf.tree, 'split produced a child-owned leaf').to.equal(cow);
+			expect(splitLeaf.owner, 'split produced a child-owned leaf').to.equal(cow.owner);
 			expect(splitLeaf, 'split leaf is a clone, not the base leaf').to.not.equal(fullLeafBefore);
 			expect(splitLeaf.entries.length, 'the full (64) leaf was split, so its halves are below capacity').to.be.lessThan(NodeCapacity);
 			expect(fullLeafBefore.entries.length, 'base full leaf untouched at capacity').to.equal(NodeCapacity);
-			expect(fullLeafBefore.tree, 'base full leaf still base-owned').to.equal(base);
+			expect(fullLeafBefore.owner, 'base full leaf still base-owned').to.equal(base.owner);
 
 			// The heaviest path must leave the child well-formed, its spine connected & base-disjoint, base pristine.
 			assertTreeInvariants(cow);
