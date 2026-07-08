@@ -218,7 +218,7 @@ export function assertTreeInvariants<TKey, TEntry>(tree: BTree<TKey, TEntry>, op
 // ---------------------------------------------------------------------------------------------------
 //
 // Every node carries an `.owner` token (src/nodes.ts) — its owning tree's identity `Symbol`. A
-// copy-on-write child `new BTree(keyFn, cmp, base)`
+// copy-on-write child `new BTree(keyFn, cmp, { base })`
 // shares its base's nodes until it needs to mutate one, at which point it clones the target and re-links
 // the clone rootward (`mutableLeaf`/`mutableBranch`/`replaceRootward`, src/b-tree.ts). The escaped
 // COW-delete bug left "an owned ancestor pointing at a stale base node" — i.e. the clone-rootward

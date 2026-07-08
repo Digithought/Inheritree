@@ -258,6 +258,8 @@ export class BTree<TKey, TEntry> {
 	): BTree<TKey, TEntry> {
 		// A bulk-loaded tree is always standalone (see doc above), so only the safety-cost tunings are forwarded;
 		// any options.base is deliberately ignored — derive children from the result afterward if COW is wanted.
+		// NOTE: the tuning fields are listed explicitly (a whitelist) so a stray `base` can't leak in. If a new
+		// non-base tuning option is ever added to BTreeOptions, add it here too — it is silently dropped otherwise.
 		const tree = new BTree<TKey, TEntry>(keyFromEntry, compare,
 			options && { freeze: options.freeze, checkComparator: options.checkComparator });
 		const entries = [...sorted];
