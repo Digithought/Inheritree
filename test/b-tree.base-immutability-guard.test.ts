@@ -184,6 +184,20 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 			expect(() => c1.get(2005), 'c1 reading its own write is fine (its base untouched)').to.not.throw();
 			expect(() => c2.get(UNTOUCHED), 'but c2 (derived from c1) trips').to.throw(MutatedBaseError);
 		});
+
+		it('deriving a new child off an already-corrupted intermediate base throws at construction', () => {
+			// Constructing off `c1` reads `c1.getCount()` (its seeded count) -> checkBase on c1, which is now
+			// stale because `base` moved.  So the guard refuses to spawn a fresh child off a corrupt base
+			// rather than seeding the new child from a poisoned count / shared structure.
+			const base = makeBase(BASE_COUNT, BASE_STRIDE);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			c1.insert({ id: 2005, value: 'c1_2005', tag: 'c1' });
+
+			base.deleteAt(base.find(UNTOUCHED)); // corrupt the base while c1 is live
+
+			expect(() => new BTree<number, Entry>(keyOf, cmp, c1),
+				'cannot spawn a child off an already-mutated intermediate base').to.throw(MutatedBaseError);
+		});
 	});
 
 	// =================================================================================================
