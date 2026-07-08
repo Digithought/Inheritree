@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { BTree, NodeCapacity } from '../src/b-tree.js';
+import { BTree, MutatedBaseError, NodeCapacity } from '../src/b-tree.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
 import { assertTreeInvariants, reachableNodesOf, sharedReachableNodes } from './helpers/invariants.js';
 import { lcg, lcgInt } from './helpers/rng.js';
@@ -18,12 +18,13 @@ import { lcg, lcgInt } from './helpers/rng.js';
  *
  *   2. THE BASE-IMMUTABILITY CONTRACT. A derived tree reads `base.root` for any un-owned path
  *      (src/b-tree.ts), so mutating a base that still has live derived children corrupts those children's
- *      view of any node they share. The same hazard outlives `clearBase`, because the flattened child can
- *      still share nodes with the former base (and, once `base` is undefined, NEITHER tree copies-on-write
- *      anymore, so a write to a shared node mutates it in place for both). This is currently a doc-only
- *      contract (readme.md + the doc comments on `clearBase` and the `base` constructor param); the tests
- *      below PIN the current (unguarded) behavior so that adding a runtime guard or a deep-copying
- *      `clearBase` later shows up as an intentional, visible diff.
+ *      view of any node they share. Hazard #1 — mutating a base while a LIVE (still-attached) derived child
+ *      exists — is now ENFORCED at runtime by a detect-on-next-use version guard (`MutatedBaseError`): the
+ *      base op still succeeds silently, but the child's next operation throws instead of returning corrupted
+ *      data. The remaining post-`clearBase` hazards below stay DOC-ONLY-AND-PINNED, because a DETACHED child
+ *      has `base === undefined` — there is no base version left to compare, so the shared-node hazard is
+ *      unguardable by construction (use `flatten()` up front for true isolation). Those tests pin the current
+ *      behavior so a future deep-copying `clearBase` would show up as an intentional, visible diff.
  *
  * NOTE ON HONESTY: the ticket hoped `clearBase` would yield a child that "shares no node with the former
  * base" and is fully isolated from later base mutations. At scale that is FALSE, and these tests assert the
@@ -317,10 +318,12 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 	});
 
 	// =================================================================================================
-	// 2. The base-immutability contract — pinned hazards (current, unguarded behavior)
+	// 2. The base-immutability contract
+	//    - hazard #1 (mutating a LIVE, still-attached child's base) is now ENFORCED by the version guard;
+	//    - the post-clearBase hazards remain DOC-ONLY-AND-PINNED (a detached child is unguardable).
 	// =================================================================================================
 	describe('the base-immutability contract (pinned hazards)', () => {
-		it('mutating a base while a derived child is LIVE leaks into the child (why the base must be frozen)', () => {
+		it('mutating a base while a derived child is LIVE throws on the child\'s next op (enforced by the version guard)', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
 			const child = new BTree<number, Entry>(keyOf, cmp, base);
 
@@ -331,11 +334,13 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 			expect(leafForKey(child, UNTOUCHED), 'child shares the untouched leaf with its base').to.equal(leafForKey(base, UNTOUCHED));
 			expect(child.get(UNTOUCHED), 'child reads the untouched key from the base').to.deep.equal({ id: UNTOUCHED, value: `base_${UNTOUCHED}`, tag: 'base' });
 
-			// VIOLATE the contract: structurally mutate the base while the child is live.
+			// VIOLATE the contract: structurally mutate the base while the child is live.  Detect-on-next-use:
+			// the base op itself still succeeds silently (a base has no back-reference to its children).
 			base.deleteAt(base.find(UNTOUCHED));
 
-			// PINNED HAZARD: the deletion leaks into the live child's view of the shared leaf.
-			expect(child.get(UNTOUCHED), "base mutation leaks into the live child's shared region (pinned hazard)").to.equal(undefined);
+			// ENFORCED (was a silent pinned hazard before the guard): the child's next op notices its base's
+			// version moved and throws, instead of returning the corrupted (now-undefined) view.
+			expect(() => child.get(UNTOUCHED)).to.throw(MutatedBaseError);
 		});
 
 		it('after clearBase, mutating the former base in an UNTOUCHED region still leaks into the flattened child (pinned hazard)', () => {

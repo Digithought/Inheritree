@@ -256,6 +256,21 @@ function collectReachableNodes(root: ITreeNode | undefined): Set<ITreeNode> {
 	return seen;
 }
 
+/** Resolves a tree's effective root through its INTERNAL `_root`/`base` fields, bypassing the public `root`
+ * getter's base-immutability guard (`MutatedBaseError`). These white-box validators must inspect a child's
+ * structure even after its base was mutated — detecting that mutation via node identity/keys is precisely
+ * their job, so they cannot let the runtime guard short-circuit the read. Mirrors the getter's fall-through:
+ * the local `_root` if present, else the nearest ancestor's, up the base chain (undefined only for a fully
+ * empty, never-initialised tree, which has no structure to validate). */
+function effectiveRootInternal<TKey, TEntry>(tree: BTree<TKey, TEntry>): TreeNode<TKey, TEntry> | undefined {
+	let t: any = tree;
+	while (t) {
+		if (t['_root']) return t['_root'] as TreeNode<TKey, TEntry>;
+		t = t['base'];
+	}
+	return undefined;
+}
+
 /** Reads a tree's full ordered key list via the public ascending cursor (key-type-agnostic). */
 function orderedKeysOf<TKey, TEntry>(tree: BTree<TKey, TEntry>): TKey[] {
 	const keyFromEntry = (tree as any)['keyFromEntry'] as (entry: TEntry) => TKey;
@@ -330,8 +345,11 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 	base: BTree<TKey, TEntry>,
 	snapshot?: BaseSnapshot<TKey>,
 ): void {
-	const childRoot = child.root;
-	const baseRoot = base.root;
+	// White-box read: resolve both roots through internal fields, NOT the public `root` getter, so the
+	// base-immutability guard (MutatedBaseError) can't short-circuit us — detecting a mutated base via the
+	// node-identity/key checks below is exactly this validator's job (see effectiveRootInternal).
+	const childRoot = effectiveRootInternal(child);
+	const baseRoot = effectiveRootInternal(base);
 
 	// --- Check 1: ownership is upward-closed from the child's root (connectivity). ---
 	const visitConnectivity = (node: ITreeNode, crossedToBase: boolean, path: string): void => {
@@ -349,7 +367,6 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 			}
 		}
 	};
-	visitConnectivity(childRoot, false, 'child.root');
 
 	// --- Check 2: no shared *mutable* node. ---
 	const baseReachable = collectReachableNodes(baseRoot);
@@ -366,7 +383,11 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 			}
 		}
 	};
-	visitShared(childRoot, 'child.root');
+
+	if (childRoot) {	// undefined only for a fully-empty, never-initialised child (no structure to check)
+		visitConnectivity(childRoot, false, 'child.root');
+		visitShared(childRoot, 'child.root');
+	}
 
 	// --- Check 3: base immutability (only when a pre-mutation snapshot was supplied). ---
 	if (snapshot) {
@@ -392,8 +413,8 @@ export function assertOwnershipInvariant<TKey, TEntry>(
 				);
 			}
 		}
-		// Identity: COW must never add, drop, or replace a base node.
-		const currentNodes = collectReachableNodes(base.root);
+		// Identity: COW must never add, drop, or replace a base node.  Guard-free read (see childRoot/baseRoot).
+		const currentNodes = collectReachableNodes(effectiveRootInternal(base));
 		if (currentNodes.size !== snapshot.nodes.size) {
 			throw new Error(
 				`Base mutation detected: base reachable-node count changed from ${snapshot.nodes.size} to ${currentNodes.size}.`,

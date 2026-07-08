@@ -128,7 +128,10 @@ If you genuinely need a tree that is independent of its former base — sharing 
 
 Use `clearBase()` when you just want to stop depending on the base object and don't mind lingering shared structure; use `flatten()` when true isolation matters.
 
-This contract is currently documented, not enforced at runtime (see *Help wanted* below).
+This contract is **enforced at runtime** by a version guard. A derived tree snapshots its base chain's version when it is constructed; if the base is mutated while the child is still live, the child throws `MutatedBaseError` on its next operation. Two limitations to know:
+
+* **Detect-on-next-use, not prevent-at-mutation.** A base has no back-reference to its children, so the base mutation itself still *succeeds silently* — the error surfaces on the child's **next** operation (any read, write, `size`/`getCount()`, or `clearBase()`), not at the moment the base is mutated.
+* **A detached child is unguardable.** After `clearBase()` the child has no base to compare against, so from that point on the guard is a permanent no-op and the lingering-shared-structure hazards described above are back in play. If you need true isolation, call **`flatten()`** up front (before any further base mutation) rather than relying on the guard.
 
 
 #### See [Reference Documentation](https://digithought.github.io/Inheritree/)
@@ -195,8 +198,6 @@ The `BTree` constructor takes an optional third `options` argument for callers t
 Bug fixes, architectural enhancements, and speed improvement suggestions are welcome.  Added "helper" features might be better as an add-on library since the goal of this is to remain minimalistic.
 
 #### Help wanted
-
-TODO: need version checking against base tree; right now, the base is assumed to be immutable while it has live derived children (see the *Base immutability contract* above). A runtime guard — e.g. a version/`hasChildren` check that throws when a base is mutated while derived — would turn that documented contract into an enforced one.
 
 * More tests
 * AssemblyScript portability?

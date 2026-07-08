@@ -29,6 +29,18 @@ export class UnsortedInputError extends Error {
 	constructor(message = "Input is not strictly ascending by the comparator") { super(message); this.name = "UnsortedInputError"; }
 }
 
+/** Thrown when a derived tree is used after its base was mutated (the base-immutability contract was
+ *  violated).  Detect-on-next-use: surfaces on the child's next operation, not at the base's mutation.  A
+ *  base has no back-reference to its children, so the base mutation itself succeeds silently; the child
+ *  notices at its next op that the base's version no longer matches the snapshot it took at construction.
+ *  Not recoverable by re-`find` (unlike {@link InvalidPathError}): the shared structure is already suspect.
+ *  If you need a base you can keep mutating, {@link BTree.flatten} a truly-isolated copy up front. */
+export class MutatedBaseError extends Error {
+	constructor(message = "Base tree was mutated while a derived child was live (base-immutability contract violated)") {
+		super(message); this.name = "MutatedBaseError";
+	}
+}
+
 /** Optional, per-tree tuning of the two always-on safety costs.  Both default to the safe behavior. */
 export interface BTreeOptions {
 	/** Freeze entries on insert/update/upsert/merge to deter key mutation.  Default true (safe).
@@ -63,6 +75,11 @@ export class BTree<TKey, TEntry> {
 	 * NOTE: _version is unbounded; as a JS number it loses integer precision past ~9e15 (2^53) mutations - not a
 	 * practical in-memory concern, so it is left as a plain counter rather than wrapped. */
 	private _version = 0;
+
+	/** Snapshot of {@link base}'s {@link chainVersion} taken at construction (0 when there is no base).  The
+	 * base-immutability guard ({@link checkBase}) compares the base chain's live total against this snapshot;
+	 * any mutation anywhere up the base chain changes the total and trips {@link MutatedBaseError}. */
+	private readonly baseVersion: number;
 
 	/** Stored entry count, maintained by exactly one +1 per real insertion ({@link internalInsertAt}) and one
 	 * -1 per real deletion ({@link internalDelete}'s success branch), so the no-arg {@link getCount} and
@@ -99,8 +116,12 @@ export class BTree<TKey, TEntry> {
 	 *   child's view of every node it still shares with the base. The fix is structural, not incidental:
 	 *   derive your children first and then leave the base frozen, or, if you need to keep mutating the
 	 *   original, mutate a *derived child* instead and treat the original base as the frozen snapshot.
-	 *   This is currently a documented contract, not a runtime guard. See also {@link clearBase}, whose
-	 *   "frozen" obligation outlives the base pointer.
+	 *   This contract is enforced at runtime by a *detect-on-next-use* version guard ({@link MutatedBaseError}):
+	 *   the child snapshots its base chain's version at construction and, on its next operation after the base
+	 *   was mutated, throws instead of returning a corrupted view. The guard cannot cover a **detached** child:
+	 *   after {@link clearBase} there is no base version left to compare, so the shared-node hazard from that
+	 *   point on is unguardable — use {@link flatten} up front if you need true isolation. See also
+	 *   {@link clearBase}, whose "frozen" obligation outlives the base pointer.
 	 */
 	constructor(
 		private readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
@@ -111,8 +132,10 @@ export class BTree<TKey, TEntry> {
 		if (baseOrOptions instanceof BTree) {
 			this.base = baseOrOptions;
 			this._count = baseOrOptions.getCount();	// O(1): base's stored count; the child tracks its delta from here
+			this.baseVersion = baseOrOptions.chainVersion();	// snapshot for the base-immutability guard
 		} else {
 			options = baseOrOptions ?? options;
+			this.baseVersion = 0;	// no base -> nothing to guard against; checkBase is a permanent no-op
 		}
 		this._freeze = options?.freeze ?? true;
 		this._checkComparator = options?.checkComparator ?? false;
@@ -120,6 +143,7 @@ export class BTree<TKey, TEntry> {
 	}
 
 	get root(): TreeNode<TKey, TEntry> {
+		this.checkBase();	// base-immutability guard: every fresh op (find/get/insert/...) resolves through here
 		if (this._root) {
 			return this._root;
 		} else if (this.base) {
@@ -142,8 +166,14 @@ export class BTree<TKey, TEntry> {
 	 * The base-immutability contract therefore outlives this call: after `clearBase()`, treat the former
 	 * base as frozen — in practice, discard it. If you genuinely need two independently-mutable trees,
 	 * build a fresh tree and re-insert, rather than relying on `clearBase` to isolate shared structure.
+	 *
+	 * The base-immutability guard runs here too: if the base was already mutated before this call, `clearBase`
+	 * throws {@link MutatedBaseError} rather than laundering an already-corrupt base into a detached tree.
+	 * After this call `base === undefined`, so the guard becomes a permanent no-op — a detached child is,
+	 * by construction, past the reach of the version guard (use {@link flatten} up front for true isolation).
 	 */
 	clearBase() {
+		this.checkBase();	// refuse to detach off an already-mutated base (would launder corruption into a standalone tree)
 		this._root = this._root ?? this.base?.root;
 		this.base = undefined;
 	}
@@ -516,6 +546,7 @@ export class BTree<TKey, TEntry> {
 	/** The total number of entries in the tree (an alias for the no-arg {@link getCount}).  O(1) - reads the
 	 * stored count, maintained per mutation. */
 	get size(): number {
+		this.checkBase();	// base-immutability guard: this reads _count DIRECTLY, bypassing root/validatePath
 		return this._count;
 	}
 
@@ -526,6 +557,7 @@ export class BTree<TKey, TEntry> {
 	 */
 	getCount(from?: { path: Path<TKey, TEntry>, ascending?: boolean }): number {
 		if (!from) {
+			this.checkBase();	// base-immutability guard: this reads _count DIRECTLY, bypassing root/validatePath
 			return this._count;	// O(1): stored count, maintained by internalInsertAt / internalDelete
 		}
 		this.validatePath(from.path as PathImpl<TKey, TEntry>);	// Validate here (public entry point): internalNext/internalPrior no longer self-validate.
@@ -1142,9 +1174,25 @@ export class BTree<TKey, TEntry> {
 	}
 
 	private validatePath(path: PathImpl<TKey, TEntry>) {
+		this.checkBase();
 		if (!this.isValid(path)) {
 			throw new InvalidPathError();
 		}
+	}
+
+	/** This tree's version plus everything it inherits up the base chain.  O(chain depth); chains are short.
+	 * A mutation ANYWHERE up the chain changes this total, so a single comparison at any level detects it.
+	 * Note the guard's snapshot is `base.chainVersion()` (the base's total, NOT including this child's own
+	 * `_version`), so a child mutating *itself* bumps only `this._version` and never trips its own guard —
+	 * only a change up the base chain does. */
+	private chainVersion(): number {
+		return this._version + (this.base ? this.base.chainVersion() : 0);
+	}
+
+	/** Throw {@link MutatedBaseError} if the base chain has been mutated since this tree snapshotted it at
+	 * construction.  A no-op when there is no base (detached or standalone). */
+	private checkBase(): void {
+		if (this.base && this.base.chainVersion() !== this.baseVersion) throw new MutatedBaseError();
 	}
 }
 
