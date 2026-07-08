@@ -115,6 +115,23 @@ describe('BTree root-getter cache (F11)', () => {
 		assertTreeInvariants(child);
 	});
 
+	it('clear() detaches like clearBase and drops the warmed base-root cache', () => {
+		const base = makeBase(BASE_COUNT, BASE_STRIDE);
+		const child = new BTree<number, Entry>(keyOf, cmp, base);
+
+		void child.root; // warm the base-root cache while still attached
+		expect((child as any)['_baseRoot'], 'base-root cache is populated before clear').to.equal(base.root);
+
+		child.clear();
+
+		expect((child as any)['_baseRoot'], 'clear() drops the cached base-root reference').to.equal(undefined);
+		expect((child as any)['base'], 'clear() detaches the base pointer').to.equal(undefined);
+		expect(child.getCount(), 'cleared tree is empty').to.equal(0);
+		child.insert({ id: 7, value: 'g' });
+		expect(child.get(7), 'cleared tree is reusable and resolves its own fresh root').to.deep.equal({ id: 7, value: 'g' });
+		assertTreeInvariants(child);
+	});
+
 	it('a plain (no-base) tree never touches _baseRoot', () => {
 		const tree = new BTree<number, Entry>(keyOf, cmp);
 		tree.insert({ id: 1, value: 'a' });

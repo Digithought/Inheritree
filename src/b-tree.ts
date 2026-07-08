@@ -547,6 +547,7 @@ export class BTree<TKey, TEntry> {
 	clear(): void {
 		this._root = new LeafNode<TEntry>([], this);
 		this.base = undefined;	// COW: an empty tree inherits nothing; dropping the pointer frees the base chain
+		this._baseRoot = undefined;	// detached like clearBase: drop the cached base-root reference (unread once base is gone, but don't pin it)
 		this._count = 0;
 		++this._version;
 	}
