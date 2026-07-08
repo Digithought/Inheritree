@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BTree, NodeCapacity } from '../src/b-tree.js';
 import { BranchNode, ITreeNode, LeafNode } from '../src/nodes.js';
-import { assertTreeInvariants, assertOwnershipInvariant, snapshotBase } from './helpers/invariants.js';
+import { assertTreeInvariants, assertOwnershipInvariant, snapshotBase, BaseSnapshot } from './helpers/invariants.js';
 import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 
 /**
@@ -656,6 +656,207 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			}
 			expect(liveSet(cow), 'final live set matches shadow').to.deep.equal(Array.from(shadow.values()).sort(byId));
 			expect(liveSet(base), 'base pristine at end').to.deep.equal(entries);
+		});
+	});
+
+	// =============================================================================================
+	// 5. Depth-3 branch rebalance under copy-on-write (branchSibSegments cascading two branch levels)
+	// =============================================================================================
+	describe('depth-3 branch rebalance under copy-on-write', () => {
+		// The depth-2 group above proves `branchSibSegments` re-links a cloned SIBLING branch at ONE branch
+		// level: a copy-on-write leaf merge underflows its parent branch, which borrows/merges against a
+		// base-owned sibling branch, cloning that sibling and re-linking it into the parent at the sibling's
+		// slot (parent index shifted by the borrow/merge delta). `branchSibSegments` is written depth-general
+		// (it operates on `segments[depth - 1]` for any `depth`, and `rebalanceBranch` recurses rootward), but
+		// nothing exercised it at `depth >= 2` — a borrow/merge that underflows a branch whose OWN parent is
+		// also a branch, cascading the clone-and-relink through TWO branch levels. That path needs a genuinely
+		// depth-3 base: root -> branch -> branch -> leaves (`depthOf` === 3).
+		//
+		// COST NOTE: reaching depth 3 by ascending insert takes ~68k entries — far fewer than a packed build
+		// would suggest. Ascending inserts leave interior nodes near HALF full, so fan-out is ~32 and the tree
+		// is ~twice as tall per entry as a near-capacity (fan-out ~64) `buildFrom` tree, which would need
+		// ~262k entries for the same depth. 70k ascending inserts build in tens of milliseconds, so the base
+		// is built ONCE here (in `before`) and every case forks a fresh copy-on-write child off it.
+		//
+		// WHY `branchSibSegments` (not just any rebalance) is the target: a branch RIGHT-merge absorbs its
+		// sibling's children directly and discards the sibling node, so it never re-links a cloned sibling. A
+		// branch BORROW or LEFT-merge, by contrast, clones the base-owned sibling branch and must re-link that
+		// clone into the parent at the SIBLING's slot — the index shift `branchSibSegments` computes, and
+		// exactly where the depth-2 bug lived. So the finders below deliberately steer the branch-level
+		// rebalance into a borrow or a left-merge, not a right-merge.
+		//
+		// NOTE: two things are intentionally NOT covered here. (1) A branch-level RIGHT-merge at depth 2 (branch
+		// absorbs its right sibling, no clone/relink) — it does not touch branchSibSegments and is lower risk; the
+		// depth-2 drain/differential cases already sweep right-merges at depth 1. (2) A randomized depth-3
+		// differential (à la the depth-2 one): keeping a tree depth-3 needs a ~68k FLOOR and per-op work on a
+		// ~70k-entry tree, far heavier than its depth-2 sibling — deferred on cost. If a depth-3 branch bug ever
+		// escapes these two deterministic regressions, add that differential (CI-only if it exceeds npm test's budget).
+		const D3_COUNT = 70000;	// > ~68k -> a genuinely 4-node-level (depth-3) tree: root -> branch -> branch -> leaf
+		const D3_STRIDE = 10;
+		const MIN_FILL = NodeCapacity >>> 1;
+
+		const asBranch = (n: ITreeNode): BranchNode<number, Entry> => n as BranchNode<number, Entry>;
+		const asLeaf = (n: ITreeNode): LeafNode<Entry> => n as LeafNode<Entry>;
+
+		// A depth-3 base holds ~70k entries, so the O(n) full-object `liveSet` deep-equals the other groups use
+		// (which compare 70k Entry OBJECTS via chai) cost seconds each here. These two cases instead collect the
+		// child's keys in ONE aliasing-free ascending walk and compare with a plain loop; `assertTreeInvariants`
+		// independently proves ascending === descending, strict order, and the stored count, and
+		// `assertOwnershipInvariant` proves the base pristine by node identity — so no full-tree object
+		// comparison is needed on the hot path.
+		function ascendingKeys(tree: BTree<number, Entry>): number[] {
+			const out: number[] = [];
+			for (const e of tree.entries()) out.push(keyOf(e));
+			return out;
+		}
+		function expectKeys(actual: number[], expected: number[], ctx: string): void {
+			expect(actual.length, `${ctx}: key count`).to.equal(expected.length);
+			for (let i = 0; i < actual.length; i++) {
+				if (actual[i] !== expected[i]) {
+					throw new Error(`${ctx}: key mismatch at index ${i}: ${actual[i]} !== ${expected[i]}`);
+				}
+			}
+		}
+
+		/** The first leaf under `low` (an interior, min-fill leaf whose immediate siblings are also min-fill) whose
+		 * deletion forces a leaf MERGE — so `low` loses a child and can underflow. Returns its interior key, or -1. */
+		function mergeLeafKeyUnder(low: BranchNode<number, Entry>): number {
+			for (let fi = 1; fi < low.nodes.length - 1; fi++) {
+				const leaf = asLeaf(low.nodes[fi]);
+				// A min-fill leaf flanked by min-fill leaves has no sibling to borrow from, so deleting one of its
+				// keys underflows it into a merge (removing a child from `low`) rather than a borrow (which leaves
+				// `low`'s child count unchanged and never reaches the branch level).
+				if (leaf.entries.length !== MIN_FILL) continue;
+				if (asLeaf(low.nodes[fi - 1]).entries.length > MIN_FILL) continue;
+				if (asLeaf(low.nodes[fi + 1]).entries.length > MIN_FILL) continue;
+				return keyOf(leaf.entries[leaf.entries.length >>> 1]);	// an interior key of the target leaf
+			}
+			return -1;
+		}
+
+		/** Finds a target key whose deletion cascades a leaf merge through TWO branch levels: the depth-2 branch
+		 * LEFT-merges (branchSibSegments@depth2), which underflows its depth-1 parent branch, which then borrows
+		 * from a sibling (branchSibSegments@depth1). Returns -1 if the base has no such site.
+		 *
+		 * Preconditions (all read off the live base structure, so the finder fails loudly if the shape shifts):
+		 *  - a depth-1 branch `mid` at min fill (loses a child -> underflows) that CAN borrow: some adjacent
+		 *    depth-1 sibling holds > MIN_FILL children, so `mid`'s rebalance is a borrow (branchSibSegments@1),
+		 *  - `mid`'s LAST child `low` (no right sibling -> it left-merges, not right-merges) at min fill,
+		 *  - `low`'s left sibling at <= MIN_FILL so the underflowing `low` left-MERGES (not left-borrows) —
+		 *    removing `low`'s slot from `mid` and thus underflowing `mid`. */
+		function findDoubleCascadeKey(base: BTree<number, Entry>): number {
+			const root = asBranch(base.root);
+			if (depthOf(root) < 3) return -1;
+			for (let mi = 0; mi < root.nodes.length; mi++) {
+				const mid = asBranch(root.nodes[mi]);
+				if (mid.nodes.length !== MIN_FILL) continue;
+				const midCanBorrow = (mi > 0 && asBranch(root.nodes[mi - 1]).nodes.length > MIN_FILL)
+					|| (mi < root.nodes.length - 1 && asBranch(root.nodes[mi + 1]).nodes.length > MIN_FILL);
+				if (!midCanBorrow) continue;
+				const low = asBranch(mid.nodes[mid.nodes.length - 1]);	// last child -> no right sibling
+				if (low.nodes.length !== MIN_FILL) continue;
+				if (asBranch(mid.nodes[mid.nodes.length - 2]).nodes.length > MIN_FILL) continue;	// left sib small -> left-merge
+				const key = mergeLeafKeyUnder(low);
+				if (key >= 0) return key;
+			}
+			return -1;
+		}
+
+		/** Finds a target key whose deletion underflows a depth-2 branch that BORROWS from its right sibling
+		 * (branchSibSegments@depth2 via a borrow — a distinct re-link path from the left-merge above), with no
+		 * cascade to depth 1. Returns -1 if absent.
+		 *
+		 * Preconditions: a depth-2 branch `low` at min fill with a NON-last position in its parent and a right
+		 * sibling holding > MIN_FILL children (so the underflowing `low` right-borrows rather than merges). */
+		function findDepth2BorrowKey(base: BTree<number, Entry>): number {
+			const root = asBranch(base.root);
+			if (depthOf(root) < 3) return -1;
+			for (let mi = 0; mi < root.nodes.length; mi++) {
+				const mid = asBranch(root.nodes[mi]);
+				for (let li = 0; li < mid.nodes.length - 1; li++) {
+					const low = asBranch(mid.nodes[li]);
+					if (low.nodes.length !== MIN_FILL) continue;
+					if (asBranch(mid.nodes[li + 1]).nodes.length <= MIN_FILL) continue;	// right sib can lend -> borrow
+					const key = mergeLeafKeyUnder(low);
+					if (key >= 0) return key;
+				}
+			}
+			return -1;
+		}
+
+		let base!: BTree<number, Entry>;
+		let ids!: number[];
+		let snap!: BaseSnapshot<number>;
+
+		before(function () {
+			this.timeout(60000);
+			({ base, ids } = makeBase(D3_COUNT, D3_STRIDE));
+			expect(depthOf(base.root), 'base is genuinely depth-3 (root -> branch -> branch -> leaf)').to.be.greaterThanOrEqual(3);
+			snap = snapshotBase(base);
+		});
+
+		it('regression: an interior delete cascades a leaf merge into a two-level branch rebalance and stays correct', () => {
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base: base });
+			const targetKey = findDoubleCascadeKey(base);
+			expect(targetKey, 'a depth-3 two-level-cascade site (branchSibSegments at depth 2 AND depth 1) exists in the base').to.be.greaterThan(-1);
+
+			// Make the two-level-cascade PREMISE explicit and self-checking: the target routes through two full
+			// branch levels (root -> mid -> low -> leaf), and BOTH its low-branch and its mid-branch sit at
+			// minimum fill — so the leaf merge underflows the low-branch (a branch rebalance, depth 2) and that
+			// in turn underflows the mid-branch (a second branch rebalance, depth 1). If the fixed build ever
+			// shifts so this no longer holds, this fails at a named line rather than silently degrading to a
+			// shallower delete.
+			const chain = nodeChainToKey(base, targetKey);	// [root, mid, low, leaf]
+			expect(chain.length, 'target routes through two full branch levels (a depth-3 spine)').to.equal(4);
+			expect(asBranch(chain[2]).nodes.length, 'target low-branch (depth 2) is at min fill: its leaf-merge underflows it').to.equal(MIN_FILL);
+			expect(asBranch(chain[1]).nodes.length, "target mid-branch (depth 1) is at min fill: the low-branch merge underflows it too").to.equal(MIN_FILL);
+
+			// Before its first write the child inherits the very base-owned target leaf, shared through both
+			// branch levels; it is at minimum fill, so a single delete underflows it and triggers the cascade.
+			const targetLeaf = leafForKey(base, targetKey);
+			expect(targetLeaf.owner, 'target leaf is base-owned').to.equal(base.owner);
+			expect(targetLeaf.entries.length, 'target leaf is at minimum fill (a single delete underflows it)').to.equal(MIN_FILL);
+			expect(leafForKey(cow, targetKey), 'child inherits the base-owned target leaf').to.equal(targetLeaf);
+
+			expect(cow.deleteAt(cow.find(targetKey)), `delete ${targetKey}`).to.equal(true);
+
+			// A cloned sibling branch mis-linked at EITHER cascaded level orphans a whole subtree (~MIN_FILL^2
+			// keys at depth 2) or corrupts partition ordering; the exact-set + structural + ownership battery
+			// below catches a dropped subtree (missing keys, and a count-vs-traversal mismatch inside
+			// assertTreeInvariants) and a broken spine (an order/shape invariant throw) alike.
+			expectKeys(ascendingKeys(cow), ids.filter(k => k !== targetKey), 'child lost EXACTLY the one deleted key');
+			expect(depthOf(cow.root), 'child is still genuinely depth-3 after the cascade').to.be.greaterThanOrEqual(3);
+			expect(cow.root.owner, 'child owns its cloned root after the rootward clone').to.equal(cow.owner);
+			expect(leafForKey(cow, targetKey).owner, 'the rebalanced region is now child-owned in the child').to.equal(cow.owner);
+			assertTreeInvariants(cow);
+			// Proves the base pristine (key list + reachable-node identities vs the pre-mutation snapshot), so a
+			// separate value-level liveSet(base) comparison would be redundant: identical node identities imply
+			// identical values (COW never mutates a base node in place).
+			assertOwnershipInvariant(cow, base, snap);
+
+			// The specific shared node the child rebalanced against is still the base's own, untouched.
+			expect(leafForKey(base, targetKey), 'base still routes through the very same node').to.equal(targetLeaf);
+			expect(targetLeaf.entries.length, 'base target leaf untouched at min fill').to.equal(MIN_FILL);
+		});
+
+		it('a leaf merge underflows a depth-2 branch that borrows a cloned sibling branch (branchSibSegments at depth 2)', () => {
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base: base });
+			const targetKey = findDepth2BorrowKey(base);
+			expect(targetKey, 'a depth-3 low-branch-borrow site (branchSibSegments at depth 2 via a borrow) exists in the base').to.be.greaterThan(-1);
+
+			const targetLeaf = leafForKey(base, targetKey);
+			expect(targetLeaf.owner, 'target leaf is base-owned').to.equal(base.owner);
+			expect(leafForKey(cow, targetKey), 'child inherits the base-owned target leaf').to.equal(targetLeaf);
+
+			expect(cow.deleteAt(cow.find(targetKey)), `delete ${targetKey}`).to.equal(true);
+
+			expectKeys(ascendingKeys(cow), ids.filter(k => k !== targetKey), 'child lost EXACTLY the one deleted key');
+			expect(depthOf(cow.root), 'child is still genuinely depth-3 after the borrow').to.be.greaterThanOrEqual(3);
+			expect(cow.root.owner, 'child owns its cloned root').to.equal(cow.owner);
+			assertTreeInvariants(cow);
+			assertOwnershipInvariant(cow, base, snap);	// base pristine by key list + node identity (see the note above)
+
+			expect(leafForKey(base, targetKey), 'base still routes through the very same node').to.equal(targetLeaf);
 		});
 	});
 });
