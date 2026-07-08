@@ -94,7 +94,7 @@ Via pnpm/yarn:
   baseTree.insert(10); baseTree.insert(20);
 
   // Create a derived tree. It initially shares all data with baseTree.
-  const derivedTree = new BTree<number, number>((e) => e, undefined, baseTree);
+  const derivedTree = new BTree<number, number>((e) => e, undefined, { base: baseTree });
   derivedTree.insert(15); // Modifies derivedTree, baseTree is unaffected
   derivedTree.deleteAt(derivedTree.find(10)); // Entry 10 deleted from derivedTree only
 
@@ -111,6 +111,8 @@ Via pnpm/yarn:
   // To detach the derived tree from its base (flattening its state):
   derivedTree.clearBase();
 ```
+
+> **Migration note (1.0):** the base tree is now passed via the options object — `new BTree(keyFromEntry, compare, { base })` — the same third argument that carries `freeze` / `checkComparator`. Earlier versions passed the base *positionally* as the third argument (`new BTree(keyFromEntry, compare, base)`); that form no longer type-checks in TypeScript, so update call sites to `{ base }`. (A positional base passed from untyped JavaScript is still forwarded at runtime with a one-time deprecation warning, but that fallback will be removed in a future release.)
 
 ##### Base immutability contract
 
@@ -179,12 +181,13 @@ The best-case and worst-case time complexities for search, insertion, and deleti
 
 ##### Optional safety costs
 
-The `BTree` constructor takes an optional third `options` argument for callers that want to trade a little safety for throughput.  Both options default to the safe behavior, so existing code is unaffected.
+The `BTree` constructor takes an optional third `options` argument.  It carries the two safety-cost tunings below (both defaulting to the safe behavior) and, for copy-on-write inheritance, an optional `base` tree (see [Copy-on-Write Inheritance](#using-copy-on-write-inheritance)).
 
 ```ts
   const tree = new BTree<number, Widget>(e => e.id, undefined, {
     freeze: false,          // default true
     checkComparator: true,  // default false
+    // base: someTree,      // optional: derive from a base tree (copy-on-write)
   });
 ```
 
@@ -192,6 +195,7 @@ The `BTree` constructor takes an optional third `options` argument for callers t
 * **`checkComparator`** (default `false`) — governs how thoroughly the comparator is verified to be antisymmetric (that `compare(a, b)` and `compare(b, a)` disagree in sign).  A broken comparator silently corrupts the tree, so this check exists to surface the bug.
   * **Default (`false`)** — only the first 32 real comparisons are checked, then the check drops off the hot path entirely.  This catches an obviously-broken comparator on the first few operations at zero steady-state cost.  **Trade-off:** a comparator that is subtly inconsistent *only* for some values encountered deep in a large tree may no longer be caught, because those comparisons fall outside the sample window.
   * **`true`** — restores the historical behavior: *every* comparison is checked, at every level, for the life of the tree.  Use this when you want the exhaustive check and can afford roughly double the comparator calls on the hot path.
+* **`base`** (optional) — a base tree to derive from via copy-on-write inheritance. When given, the constructed tree initially shares all of the base's nodes and clones them lazily as it is mutated, leaving the base untouched. See [Copy-on-Write Inheritance](#using-copy-on-write-inheritance) and the base-immutability contract there. (Ignored by `BTree.buildFrom`, which always produces a standalone tree.)
 
 ### Contributing
 

@@ -195,7 +195,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
 			expect(depthOf(base.root), 'base must be multi-level').to.be.greaterThanOrEqual(1);
 
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const shadow = new Map<number, Entry>(); // seed with the base's view
 			for (const p of (function* () { const pp = base.first(); while (pp.on) { yield base.at(pp)!; base.moveNext(pp); } })()) shadow.set(p.id, { ...p });
 
@@ -229,7 +229,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 			// Derive a child and write ONE key: it clones only the spine to that key's leaf and keeps sharing
 			// every untouched base subtree by identity.
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			expect(child.insert({ id: 55, value: 'c_55', tag: 'c' }).on, 'child insert 55').to.equal(true);
 
 			// A node physically shared between child and base (an untouched, inherited base subtree). It is
@@ -262,7 +262,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 		it('after clearBase, a follow-up op batch on the flattened child stays internally correct', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const shadow = new Map<number, Entry>();
 			const seed = base.first(); while (seed.on) { const e = base.at(seed)!; shadow.set(e.id, { ...e }); base.moveNext(seed); }
 
@@ -280,7 +280,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 		it('clearBase severs the dependency cheaply: a flattened child still SHARES untouched nodes with its former base (no deep copy)', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 
 			// Write only in a narrow region so most subtrees remain inherited (and therefore shared).
 			for (const id of [2010, 2020, 2030, 2040, 2050]) expect(child.deleteAt(child.find(id)), `del ${id}`).to.equal(true);
@@ -303,7 +303,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 		it('isolation that DOES hold: after clearBase, mutating the former base in a region the child REWROTE does not affect the child', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 
 			// The child rewrites key 2000 -> it clones the leaf holding 2000; base keeps its own original leaf.
 			const REWRITTEN = 2000;
@@ -329,13 +329,13 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 			// any path none of the three has rewritten.
 			const { base, ids: baseIds, entries: baseEntries } = makeBase(BASE_COUNT, BASE_STRIDE);
 
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const shadow1 = new Map<number, Entry>();
 			for (const id of baseIds) shadow1.set(id, { id, value: `base_${id}`, tag: 'base' });
 			driveOps(c1, shadow1, lcg(0xD15EA5E), 300, FLOOR, MAX_KEY, 'c1');
 			assertTreeInvariants(c1);
 
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 			const shadow2 = new Map<number, Entry>(shadow1); // c2 initially sees c1's view
 			driveOps(c2, shadow2, lcg(0x5CA1AB1E), 300, FLOOR, MAX_KEY, 'c2');
 			assertTreeInvariants(c2);
@@ -368,7 +368,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 	describe('the base-immutability contract (pinned hazards)', () => {
 		it('mutating a base while a derived child is LIVE throws on the child\'s next op (enforced by the version guard)', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 
 			// Child writes only near key 2000; key 50 lives in a leaf the child never touches, so the child
 			// still reads it straight from the base.
@@ -388,7 +388,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 		it('after clearBase, mutating the former base in an UNTOUCHED region still leaks into the flattened child (pinned hazard)', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 
 			for (const id of [2010, 2020, 2030]) child.deleteAt(child.find(id)); // write only near 2000
 			child.clearBase();
@@ -403,7 +403,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 		it('after clearBase, mutating the flattened CHILD in a shared region corrupts the former base (pinned hazard, both directions)', () => {
 			const { base } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 
 			for (const id of [2010, 2020, 2030]) child.deleteAt(child.find(id));
 			child.clearBase();
@@ -421,7 +421,7 @@ describe('BTree clearBase at scale & the base-immutability contract', () => {
 
 		it('clearBase on a NEVER-written child pins the base root, fully aliasing the two trees', () => {
 			const { base, ids, entries } = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base: base });
 
 			// Never written: the child has no local root and defers entirely to the base.
 			expect(hasLocalRoot(child), 'unwritten child has no local root before clearBase').to.equal(false);

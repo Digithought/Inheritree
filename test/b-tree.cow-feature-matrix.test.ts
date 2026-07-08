@@ -27,7 +27,7 @@ import { lcg, lcgInt } from './helpers/rng.js';
  *   - counts on children: a child starts at its base's O(1) stored count and tracks its own delta
  *     (src/b-tree.ts constructor + internalInsertAt/internalDelete). Pinned after derive, after child
  *     insert/delete, and through a base -> c1 -> c2 chain, each independent.
- *   - freeze:false via the 4-argument constructor `new BTree(k, c, base, { freeze:false })`: the
+ *   - freeze:false via the 4-argument constructor `new BTree(k, c, { base, freeze:false })`: the
  *     options-after-base overload the merge introduced has no direct test. Pinned to actually take effect
  *     (a child written with it stores unfrozen entries; a sibling built without it freezes) and to still
  *     COW-clone correctly.
@@ -178,7 +178,7 @@ describe('BTree COW × merged tree capabilities', () => {
 			// node still belongs to the base and must be cloned before the child writes it.
 			expect(base.root.owner, 'bulk-loaded root is owned by the base').to.equal(base.owner);
 
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 			// An unwritten child defers entirely to the bulk-loaded nodes (shares the base root by identity).
 			expect(hasLocalRoot(child), 'unwritten child has no local root').to.equal(false);
@@ -218,7 +218,7 @@ describe('BTree COW × merged tree capabilities', () => {
 			const baseEntries = liveSet(base).map(e => ({ ...e }));
 			const baseIds = baseEntries.map(keyOf);
 
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 			const shadow = new Map<number, Entry>(baseEntries.map(e => [e.id, { ...e }]));
 
@@ -270,7 +270,7 @@ describe('BTree COW × merged tree capabilities', () => {
 	describe('clear() on a derived child', () => {
 		it('drops the base, empties the child, leaves the base untouched, and shares no node', () => {
 			const { base, ids, entries } = makeInsertBase(400, 10);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 
 			// Write only in a narrow region so the child owns a spine yet still SHARES most base subtrees.
 			for (const id of [2010, 2020, 2030]) expect(child.deleteAt(child.find(id)), `del ${id}`).to.equal(true);
@@ -307,7 +307,7 @@ describe('BTree COW × merged tree capabilities', () => {
 
 		it('clear() on a NEVER-written child also detaches cleanly and shares nothing', () => {
 			const { base, ids, entries } = makeInsertBase(200, 10);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			// Never written: it fully defers to the base and shares its whole structure.
 			expect(hasLocalRoot(child), 'unwritten child has no local root').to.equal(false);
 			expect(sharedReachableNodes(child, base).length, 'unwritten child shares the whole base structure').to.be.greaterThan(0);
@@ -330,7 +330,7 @@ describe('BTree COW × merged tree capabilities', () => {
 	describe('counts on children', () => {
 		it('a freshly-derived child reports the base count with no traversal', () => {
 			const { base } = makeInsertBase(300, 10);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			// Immediately after derive, before any write: size / getCount() equal the base's, and a full walk agrees.
 			expect(child.size, 'derived child size == base size').to.equal(base.size);
 			expect(child.getCount(), 'derived child getCount() == base getCount()').to.equal(base.getCount());
@@ -340,7 +340,7 @@ describe('BTree COW × merged tree capabilities', () => {
 		it('child inserts and deletes move the child count only, never the base count', () => {
 			const { base } = makeInsertBase(300, 10);
 			const baseCount = base.size;
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 
 			for (const id of [55, 155, 255]) expect(child.insert({ id, value: `c_${id}`, tag: 'c' }).on).to.equal(true);
 			expect(child.size, 'child grew by its inserts').to.equal(baseCount + 3);
@@ -367,7 +367,7 @@ describe('BTree COW × merged tree capabilities', () => {
 			const baseCount = base.size;	// 200
 
 			// c1 derives from base, then mutates. (base is frozen for the rest of the test.)
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base });
 			expect(c1.size, 'c1 starts at base count').to.equal(baseCount);
 			for (const id of [5, 15, 25, 35, 45]) expect(c1.insert({ id, value: `c1_${id}`, tag: 'c1' }).on).to.equal(true);	// +5
 			for (const id of [100, 200, 300]) expect(c1.deleteAt(c1.find(id))).to.equal(true);	// -3
@@ -375,7 +375,7 @@ describe('BTree COW × merged tree capabilities', () => {
 			expect(c1.size, 'c1 count tracks its own delta').to.equal(c1Count);
 
 			// c2 derives from the (now frozen) c1, snapshotting c1's current count, then mutates independently.
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 			expect(c2.size, 'c2 starts at c1 count (the O(1) read at derive time)').to.equal(c1Count);
 			for (const id of [6, 16, 26, 36, 46, 56, 66, 76, 86, 96]) expect(c2.insert({ id, value: `c2_${id}`, tag: 'c2' }).on).to.equal(true);	// +10
 			for (const id of [110, 120, 130, 140]) expect(c2.deleteAt(c2.find(id))).to.equal(true);	// -4
@@ -402,13 +402,13 @@ describe('BTree COW × merged tree capabilities', () => {
 	// =============================================================================================
 	// 4. freeze:false children via the 4-argument options constructor form
 	// =============================================================================================
-	describe('freeze:false children (the `new BTree(k, c, base, { freeze:false })` form)', () => {
+	describe('freeze:false children (the `new BTree(k, c, { base, freeze:false })` form)', () => {
 		it('the 4-arg options actually take effect: a freeze:false child stores unfrozen entries, a default sibling freezes', () => {
 			const { base, ids } = makeInsertBase(200, 10);
 			const snap = snapshotBase(base);
 
-			const loose = new BTree<number, Entry>(keyOf, cmp, base, { freeze: false });
-			const strict = new BTree<number, Entry>(keyOf, cmp, base);	// default (freeze: true), same base
+			const loose = new BTree<number, Entry>(keyOf, cmp, { base, freeze: false });
+			const strict = new BTree<number, Entry>(keyOf, cmp, { base });	// default (freeze: true), same base
 
 			// Both children are genuinely derived from the base (the 4th arg didn't clobber the base wiring).
 			expect(loose.get(1500), 'freeze:false child inherits base data').to.deep.equal({ id: 1500, value: 'base_1500', tag: 'base' });
@@ -447,7 +447,7 @@ describe('BTree COW × merged tree capabilities', () => {
 		it('a freeze:false child that COW-clones a base leaf keeps the clone correctly owner-stamped and independently mutable', () => {
 			const { base, ids, entries } = makeInsertBase(300, 10);
 			const snap = snapshotBase(base);
-			const child = new BTree<number, Entry>(keyOf, cmp, base, { freeze: false });
+			const child = new BTree<number, Entry>(keyOf, cmp, { base, freeze: false });
 
 			// Force a clone of a base-owned leaf by writing a fresh interior key into it.
 			const K = 1505;	// gap between base 1500 and 1510
@@ -472,7 +472,7 @@ describe('BTree COW × merged tree capabilities', () => {
 	describe('delete-while-iterating on a child (deleteAt re-stamp across a clone boundary)', () => {
 		it('deleteAt on an inherited path clones the leaf, remaps + re-stamps that path, and moveNext advances with no re-find', () => {
 			const { base, ids, entries } = makeInsertBase(300, 10);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const K = 1500;	// interior base key
@@ -502,7 +502,7 @@ describe('BTree COW × merged tree capabilities', () => {
 
 		it('a full delete-while-iterating sweep over a child threads one path across many clone boundaries', () => {
 			const { base, ids, entries } = makeInsertBase(300, 10);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			// Delete every third base key using the README delete-while-iterating idiom: a SINGLE path, no re-find.

@@ -235,7 +235,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 	describe('upsert', () => {
 		it('upserts a NEW interior key — clones the base-owned leaf + ancestors, base untouched', () => {
 			const { base, ids } = makeBase(300, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const newId = 1505;	// interior gap (between base keys 1500 and 1510), absent
@@ -257,7 +257,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 		it('upserts a NEW key into a FULL base-owned leaf — splits it, cloning ancestors into the child', () => {
 			const { base, ids, freshInFull } = makeBaseWithFullLeaf(200, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const path = cow.upsert({ id: freshInFull, value: 'up_split', origin: 'derived' });
@@ -273,7 +273,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 		it('upserts an EXISTING base-owned key (value replace) — base entry object unchanged, child sees new value', () => {
 			const { base, ids } = makeBase(300, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const k = 1500;	// a base key
@@ -301,7 +301,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 	describe('merge', () => {
 		it('insert-branch: a fresh key is inserted (getUpdated never called)', () => {
 			const { base, ids } = makeBase(300, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const newId = 2505;
@@ -323,7 +323,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 		it('update-branch on a base-owned key: getUpdated rewrites the value, base object unchanged', () => {
 			const { base, ids } = makeBase(300, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const k = 1800;
@@ -349,7 +349,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 		it('insert-branch whose insert SPLITS a full base-owned leaf', () => {
 			const { base, ids, freshInFull } = makeBaseWithFullLeaf(200, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const [path, wasUpdate] = cow.merge(
@@ -368,7 +368,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 		it('conflict path: getUpdated returns an ALREADY-PRESENT key — no change, path not on', () => {
 			const { base, ids } = makeBase(300, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const k = 1500;	// present (the key we merge on)
@@ -404,7 +404,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 	describe('updateAt same-key (value replace)', () => {
 		it('replaces a value deep in a base-owned leaf, cloning ONLY the touched spine', () => {
 			const { base, ids } = makeBase(400, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const k = 2000;	// deep interior base key
@@ -437,7 +437,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 	describe('updateAt key-change', () => {
 		it('moves a key to a different base-owned leaf, keeping base + child consistent', () => {
 			const { base, ids } = makeBase(300, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			const oldId = 500;	// present
@@ -464,7 +464,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 		// construction asserts both preconditions, so the op is guaranteed to drive both clone paths at once.
 		it('insert SPLITS a full leaf while the delete REBALANCES a base-owned sibling — spine stays connected', () => {
 			const { base, ids, freshInFull, minFillKey } = makeBaseWithFullLeaf(256, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			// Sanity: the two leaves involved are distinct, base-owned, and at the fills we engineered.
@@ -511,7 +511,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 		it('full ordered set stays correct after every individual key-change (scattered)', () => {
 			const { base, ids } = makeBase(200, 10);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 			const snap = snapshotBase(base);
 
 			// Move a scattered subset of base keys each to a fresh interior gap key (oldId+5), one at a time,
@@ -566,7 +566,7 @@ describe('BTree COW mutation ops (upsert / merge / updateAt)', () => {
 
 				const { base, ids } = makeBase(BASE_COUNT, BASE_STRIDE);
 				const baseEntries = liveSet(base).map(e => ({ ...e }));	// deep copy for value-level pristine checks
-				const cow = new BTree<number, Entry>(keyOf, cmp, base);
+				const cow = new BTree<number, Entry>(keyOf, cmp, { base });
 				const snap = snapshotBase(base);
 
 				// Shadow mirrors expected child state; seed it with the base.

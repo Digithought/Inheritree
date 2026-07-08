@@ -41,8 +41,11 @@ export class MutatedBaseError extends Error {
 	}
 }
 
-/** Optional, per-tree tuning of the two always-on safety costs.  Both default to the safe behavior. */
-export interface BTreeOptions {
+/** Options for the {@link BTree} constructor.  Two per-tree safety-cost tunings ({@link freeze},
+ *  {@link checkComparator}, both defaulting to the safe behavior) plus the optional copy-on-write
+ *  {@link base}.  The generic parameters exist only so {@link base} can be typed; a plain
+ *  `{ freeze, checkComparator }` options object infers them and needs no explicit type arguments. */
+export interface BTreeOptions<TKey = unknown, TEntry = unknown> {
 	/** Freeze entries on insert/update/upsert/merge to deter key mutation.  Default true (safe).
 	 *  Set false only for trusted bulk loads of never-mutated entries — the tree then offers no protection. */
 	freeze?: boolean;
@@ -50,6 +53,10 @@ export interface BTreeOptions {
 	 *  Default false.  When false, a cheap bounded sample of the first comparisons is checked instead, then the
 	 *  check drops off the hot path entirely. */
 	checkComparator?: boolean;
+	/** Base tree to derive from (copy-on-write inheritance).  When given, the constructed tree initially shares
+	 *  all of the base's nodes and clones them lazily as it is mutated, leaving the base untouched.  Subject to
+	 *  the BASE-IMMUTABILITY CONTRACT documented on the {@link BTree} constructor. */
+	base?: BTree<TKey, TEntry>;
 }
 
 /**
@@ -117,12 +124,16 @@ export class BTree<TKey, TEntry> {
 	/**
 	 * @param [keyFromEntry=(entry: TEntry) => entry as unknown as TKey] a function to extract the key from an entry.  The default assumes the key is the entry itself.
 	 * @param [compare=(a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0] a comparison function for keys.  The default uses < and > operators.
-	 * @param [baseOrOptions] either a base tree to derive from (copy-on-write inheritance), or a
-	 *   {@link BTreeOptions} object.  When a base tree is given, the derived tree initially shares all of the
-	 *   base's nodes and clones them lazily as it is mutated, and options may be passed as the fourth argument.
-	 * @param [options] optional per-tree tuning of the freeze / comparator-check safety costs.  See
-	 *   {@link BTreeOptions}.  Used when the third argument is a base tree; ignored otherwise (pass the options
-	 *   as the third argument when there is no base).
+	 * @param [options] optional {@link BTreeOptions}: the freeze / comparator-check safety-cost tunings and, for
+	 *   copy-on-write inheritance, an optional {@link BTreeOptions.base}.  When a `base` is given the constructed
+	 *   tree initially shares all of the base's nodes and clones them lazily as it is mutated, leaving the base
+	 *   untouched.
+	 *
+	 *   DEPRECATED — passing a base tree *positionally* as this third argument (`new BTree(kfe, cmp, base)`) was
+	 *   the pre-1.0 form.  In TypeScript it is now a compile error (a {@link BTree} is not assignable to
+	 *   {@link BTreeOptions}), so TS callers must migrate to `new BTree(kfe, cmp, { base })`.  For JavaScript or
+	 *   otherwise-untyped callers the runtime still detects a positionally-passed base, forwards it as `{ base }`,
+	 *   and logs a one-time deprecation warning; that fallback will be removed in a future release.
 	 *
 	 *   BASE-IMMUTABILITY CONTRACT: a base must be treated as **immutable for the lifetime of its derived
 	 *   children**. The child reads any un-modified node directly from the base (see {@link root}), so
@@ -140,15 +151,22 @@ export class BTree<TKey, TEntry> {
 	constructor(
 		private readonly keyFromEntry = (entry: TEntry) => entry as unknown as TKey,
 		private readonly compare = (a: TKey, b: TKey) => a < b ? -1 : a > b ? 1 : 0 as number,
-		baseOrOptions?: BTree<TKey, TEntry> | BTreeOptions,
-		options?: BTreeOptions,
+		options?: BTreeOptions<TKey, TEntry>,
 	) {
-		if (baseOrOptions instanceof BTree) {
-			this.base = baseOrOptions;
-			this._count = baseOrOptions.getCount();	// O(1): base's stored count; the child tracks its delta from here
-			this.baseVersion = baseOrOptions.chainVersion();	// snapshot for the base-immutability guard
+		// Deprecated positional-base form `new BTree(kfe, cmp, base)`.  In TypeScript this no longer type-checks
+		// (a BTree is not assignable to BTreeOptions), but a JavaScript / untyped caller can still land a BTree
+		// here.  Detect it at runtime, warn once, and forward as `{ base }` — a JS-only deprecation fallback,
+		// removed in a future release.
+		if (options instanceof BTree) {
+			warnDeprecatedPositionalBase();
+			options = { base: options };
+		}
+		const base = options?.base;
+		if (base) {
+			this.base = base;
+			this._count = base.getCount();	// O(1): base's stored count; the child tracks its delta from here
+			this.baseVersion = base.chainVersion();	// snapshot for the base-immutability guard
 		} else {
-			options = baseOrOptions ?? options;
 			this.baseVersion = 0;	// no base -> nothing to guard against; checkBase is a permanent no-op
 		}
 		this._freeze = options?.freeze ?? true;
@@ -236,9 +254,12 @@ export class BTree<TKey, TEntry> {
 		sorted: Iterable<TEntry>,
 		keyFromEntry?: (entry: TEntry) => TKey,
 		compare?: (a: TKey, b: TKey) => number,
-		options?: BTreeOptions,
+		options?: BTreeOptions<TKey, TEntry>,
 	): BTree<TKey, TEntry> {
-		const tree = new BTree<TKey, TEntry>(keyFromEntry, compare, options);
+		// A bulk-loaded tree is always standalone (see doc above), so only the safety-cost tunings are forwarded;
+		// any options.base is deliberately ignored — derive children from the result afterward if COW is wanted.
+		const tree = new BTree<TKey, TEntry>(keyFromEntry, compare,
+			options && { freeze: options.freeze, checkComparator: options.checkComparator });
 		const entries = [...sorted];
 		const n = entries.length;
 		const keyOf = tree.keyFromEntry;
@@ -1247,4 +1268,19 @@ class Split<TKey, TEntry> {
 		public right: TreeNode<TKey, TEntry>,
 		public indexDelta: number,
 	) { }
+}
+
+/** True once the deprecated positional-base constructor form has been warned about, so the warning fires at
+ *  most once per process (a deprecated call site in a hot loop must not flood the console). */
+let deprecatedPositionalBaseWarned = false;
+
+/** Emits the one-time deprecation warning for `new BTree(keyFromEntry, compare, base)` (a base passed
+ *  positionally rather than via `{ base }`).  See the {@link BTree} constructor docs. */
+function warnDeprecatedPositionalBase(): void {
+	if (deprecatedPositionalBaseWarned) return;
+	deprecatedPositionalBaseWarned = true;
+	console.warn(
+		'BTree: passing a base tree as the third constructor argument is deprecated and will be removed in a '
+		+ 'future release. Pass it via the options object instead: new BTree(keyFromEntry, compare, { base }).',
+	);
 }

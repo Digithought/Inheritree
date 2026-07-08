@@ -7,7 +7,7 @@ import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 /**
  * Regression + property suite for copy-on-write INSERT splitting.
  *
- * A COW child tree — `new BTree(keyFn, cmp, base)` — inherits an immutable base and absorbs writes
+ * A COW child tree — `new BTree(keyFn, cmp, { base })` — inherits an immutable base and absorbs writes
  * copy-on-write. Inserting a key into a leaf that is *full* splits that leaf, and the split may
  * cascade up: each affected branch must be cloned into the child and the freshly-cloned child re-linked
  * rootward (`leafInsert` -> `mutableLeaf`, then `branchInsert` -> `mutableBranch` -> `replaceRootward`,
@@ -173,7 +173,7 @@ describe('BTree COW insert splitting', () => {
 			expect(baseSet.has(k), `insert key ${k} must be absent from base`).to.equal(false);
 		}
 
-		const cow = new BTree<number, number>(idFn, cmp, base);
+		const cow = new BTree<number, number>(idFn, cmp, { base });
 		const snap = snapshotBase(base);	// capture base before any COW write, for the ownership invariant
 		const baseDepth = depthOf(base.root);
 		const baseRootChildren = rootChildCount(base);
@@ -261,7 +261,7 @@ describe('BTree COW insert splitting', () => {
 		// exact re-link path the COW bug lived in. Invariants + base-pristine are re-checked after each region.
 		it('several separated interior regions each clone and re-link into the owned spine', () => {
 			const { base, keys } = makeBase(400, 100);	// keys 100..40000, 2-level
-			const cow = new BTree<number, number>(idFn, cmp, base);
+			const cow = new BTree<number, number>(idFn, cmp, { base });
 			const snap = snapshotBase(base);
 			const baseSet = new Set(keys);
 
@@ -318,7 +318,7 @@ describe('BTree COW insert splitting', () => {
 		// that breaks.
 		it('full ordered set stays correct after every individual insert (scattered order)', () => {
 			const { base, keys } = makeBase(200, 100);	// keys 100..20000
-			const cow = new BTree<number, number>(idFn, cmp, base);
+			const cow = new BTree<number, number>(idFn, cmp, { base });
 			const snap = snapshotBase(base);
 
 			// Scattered fresh keys (some below the base min, some interior), shuffled so each insert hits a
@@ -350,7 +350,7 @@ describe('BTree COW insert splitting', () => {
 			const { base, keys } = makeBase(300, 100);	// keys 100..30000
 			const baseSnap = snapshotBase(base);
 
-			const mid = new BTree<number, number>(idFn, cmp, base);
+			const mid = new BTree<number, number>(idFn, cmp, { base });
 			// A few mid-level inserts so mid owns some nodes but inherits others (all fresh, interior gaps).
 			const midInserts = [550, 15050, 25050];
 			for (const k of midInserts) expect(mid.insert(k).on, `mid insert ${k}`).to.equal(true);
@@ -360,7 +360,7 @@ describe('BTree COW insert splitting', () => {
 			assertOwnershipInvariant(mid, base, baseSnap);	// mid's spine owns rootward; base pristine
 			const midSnap = snapshotBase(mid);
 
-			const leaf = new BTree<number, number>(idFn, cmp, mid);
+			const leaf = new BTree<number, number>(idFn, cmp, { base: mid });
 			// A dense interior band on the grandchild — forces leaf/branch clones through mid into base.
 			const band = freshBlock(10000, 140, 100);
 			for (const k of band) expect(leaf.insert(k).on, `leaf insert ${k}`).to.equal(true);
@@ -390,7 +390,7 @@ describe('BTree COW insert splitting', () => {
 
 			const { base, keys } = makeBase(COUNT, STRIDE);
 			const baseSnapshot = [...keys];
-			const cow = new BTree<number, number>(idFn, cmp, base);
+			const cow = new BTree<number, number>(idFn, cmp, { base });
 			const snap = snapshotBase(base);
 			const shadow = new Set<number>(keys);
 

@@ -51,7 +51,7 @@ describe('BTree.flatten (genuine-isolation copy)', () => {
 		for (let i = 1; i <= 300; i++) base.insert({ id: i * 10, value: `base_${i * 10}` });
 		assertTreeInvariants(base);
 
-		const child = new BTree<number, Entry>(keyOf, cmp, base);
+		const child = new BTree<number, Entry>(keyOf, cmp, { base });
 		// Write only a narrow region so most of child's structure is still (shared) base structure.
 		for (const id of [1000, 1010, 1020]) child.deleteAt(child.find(id));
 		for (const id of [1001, 1011]) child.insert({ id, value: `c_${id}` });

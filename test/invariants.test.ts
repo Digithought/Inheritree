@@ -140,14 +140,14 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 	describe('accepts valid copy-on-write trees', () => {
 		it('a child with no local writes (root deferred to base)', () => {
 			const base = makeBase();
-			const child = new BTree<number, number>(idFn, cmp, base);
+			const child = new BTree<number, number>(idFn, cmp, { base });
 			expect(() => assertOwnershipInvariant(child, base)).to.not.throw();
 		});
 
 		it('a child after a non-front-anchored interior-band delete (the rebalance path)', () => {
 			const base = makeBase();
 			const snap = snapshotBase(base);
-			const child = new BTree<number, number>(idFn, cmp, base);
+			const child = new BTree<number, number>(idFn, cmp, { base });
 			for (let k = 51; k <= 150; k++) {
 				expect(child.deleteAt(child.find(k)), `delete ${k}`).to.equal(true);
 			}
@@ -159,8 +159,8 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 		it('two independent children forked off one base each satisfy the invariant', () => {
 			const base = makeBase();
 			const snap = snapshotBase(base);
-			const a = new BTree<number, number>(idFn, cmp, base);
-			const b = new BTree<number, number>(idFn, cmp, base);
+			const a = new BTree<number, number>(idFn, cmp, { base });
+			const b = new BTree<number, number>(idFn, cmp, { base });
 			for (let k = 60; k <= 90; k++) a.deleteAt(a.find(k));
 			for (let k = 120; k <= 160; k++) b.deleteAt(b.find(k));
 			expect(() => assertOwnershipInvariant(a, base, snap)).to.not.throw();
@@ -172,9 +172,9 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			// own base) must not make base-immutability throw "no local root". This is the layering ticket 5
 			// is documented to use. Immutability is still enforced via effective-root keys + node identities.
 			const base = makeBase();
-			const c1 = new BTree<number, number>(idFn, cmp, base);	// never written -> no local root
+			const c1 = new BTree<number, number>(idFn, cmp, { base });	// never written -> no local root
 			const snapC1 = snapshotBase(c1);
-			const c2 = new BTree<number, number>(idFn, cmp, c1);
+			const c2 = new BTree<number, number>(idFn, cmp, { base: c1 });
 			for (let k = 60; k <= 90; k++) c2.deleteAt(c2.find(k));
 			expect(() => assertOwnershipInvariant(c2, c1, snapC1)).to.not.throw();
 			// And it still catches a mutation of that intermediate base after the snapshot.
@@ -188,7 +188,7 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			// Simulates the documented bug manifestation — "a base node aliased into the child's mutable
 			// spine" — by hanging a freshly child-owned leaf below a base-owned branch in the child's tree.
 			const base = new BTree<number, number>(idFn, cmp);
-			const child = new BTree<number, number>(idFn, cmp, base);
+			const child = new BTree<number, number>(idFn, cmp, { base });
 
 			const orphanClone = new LeafNode<number>([200, 201], child.owner);				// child-owned
 			const baseBranch = new BranchNode<number, number>([], [orphanClone], base.owner);			// base-owned, but holds a child clone
@@ -205,7 +205,7 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			// Passes connectivity (the shared node sits in child-owned territory) but a child write to it
 			// would corrupt the base, because the same object is wired into both trees.
 			const base = new BTree<number, number>(idFn, cmp);
-			const child = new BTree<number, number>(idFn, cmp, base);
+			const child = new BTree<number, number>(idFn, cmp, { base });
 
 			const shared = new LeafNode<number>([5, 6], child.owner);							// child-owned (mutable)
 			(child as any)['_root'] = new BranchNode<number, number>(
@@ -224,7 +224,7 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 		it('base immutability: a base mutated after the snapshot is detected', () => {
 			const base = makeBase();
 			const snap = snapshotBase(base);
-			const child = new BTree<number, number>(idFn, cmp, base);
+			const child = new BTree<number, number>(idFn, cmp, { base });
 			child.deleteAt(child.find(120));											// a legitimate COW op
 
 			expect(() => assertOwnershipInvariant(child, base, snap), 'pristine base passes').to.not.throw();
@@ -238,7 +238,7 @@ describe('assertOwnershipInvariant (COW ownership validator)', () => {
 			// that is by design — callers pair it with their own base-pristine assertion or pass a snapshot.
 			const base = makeBase();
 			const snap = snapshotBase(base);
-			const child = new BTree<number, number>(idFn, cmp, base);
+			const child = new BTree<number, number>(idFn, cmp, { base });
 			base.insert(88888);
 			expect(() => assertOwnershipInvariant(child, base)).to.not.throw();			// no snapshot: not flagged
 			expect(() => assertOwnershipInvariant(child, base, snap)).to.throw(/Base mutation/);	// snapshot: flagged

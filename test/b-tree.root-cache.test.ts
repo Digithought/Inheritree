@@ -54,10 +54,10 @@ describe('BTree root-getter cache (F11)', () => {
 
 	it('a deep chain collapses to O(1) root resolution after the first read: ancestor getters stop being re-invoked', () => {
 		const base = makeBase(BASE_COUNT, BASE_STRIDE);
-		const c1 = new BTree<number, Entry>(keyOf, cmp, base);
-		const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
-		const c3 = new BTree<number, Entry>(keyOf, cmp, c2);
-		const c4 = new BTree<number, Entry>(keyOf, cmp, c3); // 5-level chain: base -> c1 -> c2 -> c3 -> c4
+		const c1 = new BTree<number, Entry>(keyOf, cmp, { base });
+		const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
+		const c3 = new BTree<number, Entry>(keyOf, cmp, { base: c2 });
+		const c4 = new BTree<number, Entry>(keyOf, cmp, { base: c3 }); // 5-level chain: base -> c1 -> c2 -> c3 -> c4
 
 		const baseCount = countRootReads(base);
 		const c1Count = countRootReads(c1);
@@ -86,7 +86,7 @@ describe('BTree root-getter cache (F11)', () => {
 
 	it('clearBase() invalidates the cache: a locally-written child ignores a stale cached base root and clearBase clears it', () => {
 		const base = makeBase(BASE_COUNT, BASE_STRIDE);
-		const child = new BTree<number, Entry>(keyOf, cmp, base);
+		const child = new BTree<number, Entry>(keyOf, cmp, { base });
 
 		void child.root; // warm the base-root cache while still unwritten
 		expect((child as any)['_baseRoot'], 'base-root cache is populated before any local write').to.not.equal(undefined);
@@ -104,7 +104,7 @@ describe('BTree root-getter cache (F11)', () => {
 
 	it('an unwritten child: clearBase after warming the cache still pins the exact former base root', () => {
 		const base = makeBase(BASE_COUNT, BASE_STRIDE);
-		const child = new BTree<number, Entry>(keyOf, cmp, base); // never locally written
+		const child = new BTree<number, Entry>(keyOf, cmp, { base }); // never locally written
 
 		void child.root; // warm the base-root cache
 		expect((child as any)['_baseRoot'], 'base-root cache is populated').to.equal(base.root);
@@ -117,7 +117,7 @@ describe('BTree root-getter cache (F11)', () => {
 
 	it('clear() detaches like clearBase and drops the warmed base-root cache', () => {
 		const base = makeBase(BASE_COUNT, BASE_STRIDE);
-		const child = new BTree<number, Entry>(keyOf, cmp, base);
+		const child = new BTree<number, Entry>(keyOf, cmp, { base });
 
 		void child.root; // warm the base-root cache while still attached
 		expect((child as any)['_baseRoot'], 'base-root cache is populated before clear').to.equal(base.root);
@@ -143,7 +143,7 @@ describe('BTree root-getter cache (F11)', () => {
 
 	it('cache-then-check: a cached root does not mask base mutation - MutatedBaseError still fires on the cached path', () => {
 		const base = makeBase(BASE_COUNT, BASE_STRIDE);
-		const child = new BTree<number, Entry>(keyOf, cmp, base);
+		const child = new BTree<number, Entry>(keyOf, cmp, { base });
 		child.insert({ id: 2005, value: 'c_2005' });
 
 		// Warm the cache with several legitimate reads before the base is mutated.

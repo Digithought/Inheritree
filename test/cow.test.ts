@@ -46,7 +46,7 @@ describe('BTree Copy-on-Write (COW) Functionality', () => {
         baseTree.insert({ id: 5, data: 'base five' });
 
         // Create derived tree from baseTree
-        derivedTree = new BTree<number, TestObject>(keyFromObject, undefined, baseTree);
+        derivedTree = new BTree<number, TestObject>(keyFromObject, undefined, { base: baseTree });
     });
 
     describe('Basic Isolation', () => {
@@ -379,7 +379,7 @@ describe('BTree Copy-on-Write (COW) Functionality', () => {
                 assertTreeInvariants(base);
                 const baseEntries = getAllEntries(base, keyExtractor).map(e => ({ ...e })); // deep copy for value-level pristine checks
 
-                const derived = new BTree<number, Entry>(keyExtractor, undefined, base);
+                const derived = new BTree<number, Entry>(keyExtractor, undefined, { base });
                 const snap = snapshotBase(base);  // capture base BEFORE any COW write, for the ownership invariant
 
                 // Shadow Map mirrors the expected derived state; seed it with the base's entries.

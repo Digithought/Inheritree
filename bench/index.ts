@@ -139,7 +139,7 @@ for (const kind of KINDS) {
 			const path = deleteDerivedTree.find(key);
 			if (path.on) deleteDerivedTree.deleteAt(path);
 		}
-	}, { beforeEach: () => { deleteDerivedTree = new BTree<Key, Key>(undefined, undefined, deleteBase); } });
+	}, { beforeEach: () => { deleteDerivedTree = new BTree<Key, Key>(undefined, undefined, { base: deleteBase }); } });
 }
 
 await bench.run();

@@ -88,7 +88,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 	describe('deferred detection (detect-on-next-use)', () => {
 		it('the base mutation returns normally; the very next child op throws', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			child.insert({ id: 2005, value: 'c_2005', tag: 'c' }); // local write: child shares-but-owns a spine
 
 			// Half 1 — the defining "silent" half: mutating the base must NOT throw at the mutation site.
@@ -115,7 +115,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 			];
 			for (const [name, op] of points) {
 				const base = makeBase(BASE_COUNT, BASE_STRIDE);
-				const child = new BTree<number, Entry>(keyOf, cmp, base);
+				const child = new BTree<number, Entry>(keyOf, cmp, { base });
 				child.insert({ id: 2005, value: 'c_2005', tag: 'c' });
 				base.deleteAt(base.find(UNTOUCHED)); // violate
 				expect(() => op(child), `${name} must throw MutatedBaseError after a base mutation`).to.throw(MutatedBaseError);
@@ -127,7 +127,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 			// so the base mutation surfaces as MutatedBaseError (not InvalidPathError).
 			const mk = () => {
 				const base = makeBase(BASE_COUNT, BASE_STRIDE);
-				const child = new BTree<number, Entry>(keyOf, cmp, base);
+				const child = new BTree<number, Entry>(keyOf, cmp, { base });
 				child.insert({ id: 2005, value: 'c_2005', tag: 'c' });
 				const path = child.find(60); // valid path, taken before the violation
 				expect(path.on, 'precondition: path is on key 60').to.equal(true);
@@ -151,9 +151,9 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 	describe('multi-level chain detection', () => {
 		it('a mutation to the ROOT base (base -> c1 -> c2) trips c2', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base });
 			c1.insert({ id: 2005, value: 'c1_2005', tag: 'c1' });
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 			c2.insert({ id: 3005, value: 'c2_3005', tag: 'c2' });
 
 			// Mutate two levels up (base) while c2 is live.
@@ -164,8 +164,8 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 
 		it('a mutation to the INTERMEDIATE base c1 (base -> c1 -> c2) trips c2', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base });
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 			c2.insert({ id: 3005, value: 'c2_3005', tag: 'c2' });
 
 			// Mutate c1 (c2's immediate base) while c2 is live. c1's own op succeeds (its base is untouched).
@@ -176,8 +176,8 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 
 		it('mutating c1 does not trip c1 itself, only its descendants', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base });
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 
 			c1.insert({ id: 2005, value: 'c1_2005', tag: 'c1' });
 
@@ -190,12 +190,12 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 			// stale because `base` moved.  So the guard refuses to spawn a fresh child off a corrupt base
 			// rather than seeding the new child from a poisoned count / shared structure.
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base });
 			c1.insert({ id: 2005, value: 'c1_2005', tag: 'c1' });
 
 			base.deleteAt(base.find(UNTOUCHED)); // corrupt the base while c1 is live
 
-			expect(() => new BTree<number, Entry>(keyOf, cmp, c1),
+			expect(() => new BTree<number, Entry>(keyOf, cmp, { base: c1 }),
 				'cannot spawn a child off an already-mutated intermediate base').to.throw(MutatedBaseError);
 		});
 	});
@@ -208,7 +208,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 	describe('seeded _count skew via the O(1) count reads', () => {
 		it('child.size throws after the base was mutated (size reads _count directly)', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			expect(child.size, 'child seeds its count from the base').to.equal(BASE_COUNT);
 
 			base.deleteAt(base.find(UNTOUCHED)); // base shrinks; the child's seeded _count is now stale
@@ -218,7 +218,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 
 		it('no-arg child.getCount() throws after the base was mutated', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			expect(child.getCount(), 'child seeds its count from the base').to.equal(BASE_COUNT);
 
 			base.insert({ id: 55, value: 'base_new', tag: 'base' }); // base grows; seeded _count stale the other way
@@ -233,7 +233,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 	describe('clearBase laundering', () => {
 		it('clearBase throws if the base was already mutated (refuses to launder corruption into a standalone tree)', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			child.insert({ id: 2005, value: 'c_2005', tag: 'c' });
 
 			base.deleteAt(base.find(UNTOUCHED)); // violate before detaching
@@ -244,7 +244,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 
 		it('clearBase succeeds on an untouched base, and the detached child no longer guards', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			child.insert({ id: 2005, value: 'c_2005', tag: 'c' });
 
 			expect(() => child.clearBase(), 'clearBase on an untouched base is fine').to.not.throw();
@@ -262,7 +262,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 	describe('no false positives', () => {
 		it('a child driven through a heavy op stream never throws while its base stays untouched', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 			const shadow = new Map<number, Entry>();
 			const seed = base.first(); while (seed.on) { const e = base.at(seed)!; shadow.set(e.id, { ...e }); base.moveNext(seed); }
 
@@ -275,7 +275,7 @@ describe('BTree base-immutability guard (MutatedBaseError)', () => {
 
 		it('a child mutating ITSELF never trips its own guard (self-version bumps are excluded from the check)', () => {
 			const base = makeBase(BASE_COUNT, BASE_STRIDE);
-			const child = new BTree<number, Entry>(keyOf, cmp, base);
+			const child = new BTree<number, Entry>(keyOf, cmp, { base });
 
 			for (let i = 0; i < 50; i++) {
 				expect(child.insert({ id: 2000 + i + 0.5, value: `c_${i}`, tag: 'c' }).on, `self insert ${i}`).to.equal(true);

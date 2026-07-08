@@ -15,7 +15,7 @@ describe('BTree COW node clone: entries shared by reference (not deep-copied)', 
 		base.insert(new Widget(1, 'base one'));
 		base.insert(new Widget(2, 'base two'));
 
-		const derived = new BTree<number, Widget>(w => w.id, undefined, base);
+		const derived = new BTree<number, Widget>(w => w.id, undefined, { base });
 		// Write a different key so the leaf holding id=1 gets cloned via copy-on-write.
 		derived.insert(new Widget(3, 'derived three'));
 
@@ -28,7 +28,7 @@ describe('BTree COW node clone: entries shared by reference (not deep-copied)', 
 		const base = new BTree<number, { id: number; fn: () => number }>(e => e.id);
 		base.insert({ id: 1, fn: () => 42 });
 
-		const derived = new BTree<number, { id: number; fn: () => number }>(e => e.id, undefined, base);
+		const derived = new BTree<number, { id: number; fn: () => number }>(e => e.id, undefined, { base });
 		expect(() => derived.insert({ id: 2, fn: () => 99 })).not.to.throw();
 
 		expect(derived.get(1)!.fn()).to.equal(42);
@@ -39,7 +39,7 @@ describe('BTree COW node clone: entries shared by reference (not deep-copied)', 
 		base.insert({ id: 1 });
 		base.insert({ id: 2 });
 
-		const derived = new BTree<number, { id: number }>(e => e.id, undefined, base);
+		const derived = new BTree<number, { id: number }>(e => e.id, undefined, { base });
 		derived.insert({ id: 3 }); // forces the shared leaf to clone
 
 		expect(derived.get(1)).to.equal(base.get(1));
@@ -50,7 +50,7 @@ describe('BTree COW node clone: entries shared by reference (not deep-copied)', 
 		const base = new BTree<number, { id: number }>(e => e.id);
 		base.insert({ id: 1 });
 
-		const derived = new BTree<number, { id: number }>(e => e.id, undefined, base);
+		const derived = new BTree<number, { id: number }>(e => e.id, undefined, { base });
 		derived.insert({ id: 2 });
 
 		expect(Object.isFrozen(base.get(1))).to.be.true;
@@ -62,7 +62,7 @@ describe('BTree COW node clone: entries shared by reference (not deep-copied)', 
 		const original = { id: 1 };
 		base.insert(original);
 
-		const derived = new BTree<number, { id: number }>(e => e.id, undefined, base, { freeze: false });
+		const derived = new BTree<number, { id: number }>(e => e.id, undefined, { base, freeze: false });
 		derived.insert({ id: 2 });
 
 		expect(Object.isFrozen(base.get(1))).to.be.false;
@@ -75,7 +75,7 @@ describe('BTree COW node clone: entries shared by reference (not deep-copied)', 
 		// Push well past NodeCapacity (64) so base becomes multi-level (branch + leaves).
 		for (let i = 0; i < 400; i++) base.insert({ id: i });
 
-		const derived = new BTree<number, { id: number }>(e => e.id, undefined, base);
+		const derived = new BTree<number, { id: number }>(e => e.id, undefined, { base });
 		// Write one key so only that leaf (and its ancestor branches) clone; most leaves stay base-owned.
 		derived.insert({ id: 1000 });
 

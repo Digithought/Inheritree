@@ -6,7 +6,7 @@ import { lcg, lcgInt, shuffle } from './helpers/rng.js';
 /**
  * Regression + property suite for copy-on-write DELETE rebalancing.
  *
- * A COW child tree — `new BTree(keyFn, cmp, base)` — inherits an immutable base and
+ * A COW child tree — `new BTree(keyFn, cmp, { base })` — inherits an immutable base and
  * absorbs writes copy-on-write. Deleting a key that triggers a sibling *borrow* or
  * *merge* during rebalance must clone the affected sibling/parent into the child and
  * re-link the clone rootward. Two bugs broke this:
@@ -49,7 +49,7 @@ describe('BTree COW delete rebalancing', () => {
 		for (let i = 1; i <= n; i++) {
 			expect(base.insert(i).on, `base insert ${i}`).to.equal(true);
 		}
-		const cow = new BTree<number, number>(idFn, cmp, base);
+		const cow = new BTree<number, number>(idFn, cmp, { base });
 		return { base, cow };
 	}
 
@@ -246,7 +246,7 @@ describe('BTree COW delete rebalancing', () => {
 			for (let i = 1; i <= n; i++) base.insert(i);
 			const baseSnap = snapshotBase(base);
 
-			const mid = new BTree<number, number>(idFn, cmp, base);
+			const mid = new BTree<number, number>(idFn, cmp, { base });
 			// A few mid-level writes so mid owns some nodes but inherits others.
 			for (const k of [60, 120, 180]) expect(mid.deleteAt(mid.find(k)), `mid delete ${k}`).to.equal(true);
 			const midExpected = range(1, n).filter(k => ![60, 120, 180].includes(k));
@@ -255,7 +255,7 @@ describe('BTree COW delete rebalancing', () => {
 			assertOwnershipInvariant(mid, base, baseSnap);	// mid's spine owns rootward; base pristine
 			const midSnap = snapshotBase(mid);
 
-			const leaf = new BTree<number, number>(idFn, cmp, mid);
+			const leaf = new BTree<number, number>(idFn, cmp, { base: mid });
 			// Non-front-anchored band delete on the grandchild — only keys actually present in
 			// mid (60/120 were already removed a level up, so they are legitimately absent here).
 			const band = (k: number) => k >= 51 && k <= 150;
@@ -290,7 +290,7 @@ describe('BTree COW delete rebalancing', () => {
 			for (let i = 1; i <= INITIAL; i++) base.insert(i);
 			const baseSnapshot = range(1, INITIAL);
 
-			const cow = new BTree<number, number>(idFn, cmp, base);
+			const cow = new BTree<number, number>(idFn, cmp, { base });
 			const snap = snapshotBase(base);
 			const shadow = new Set<number>(baseSnapshot);
 

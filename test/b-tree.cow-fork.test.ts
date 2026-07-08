@@ -204,8 +204,8 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 
 		it('two children mutated independently stay mutually isolated; base stays pristine', () => {
 			const { base, ids, entries } = makeBase(400, 10);	// keys 10..4000, multi-level
-			const a = new BTree<number, Entry>(keyOf, cmp, base);
-			const b = new BTree<number, Entry>(keyOf, cmp, base);
+			const a = new BTree<number, Entry>(keyOf, cmp, { base: base });
+			const b = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const snap = snapshotBase(base);	// one snapshot; neither child may ever mutate the base
 
 			// Key-disjoint op sets (A's keys and B's keys never overlap), each non-front-anchored
@@ -291,7 +291,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 				const { base, ids, entries } = makeBase(BASE_COUNT, BASE_STRIDE);
 				const snap = snapshotBase(base);
 
-				const children = Array.from({ length: NUM_CHILDREN }, () => new BTree<number, Entry>(keyOf, cmp, base));
+				const children = Array.from({ length: NUM_CHILDREN }, () => new BTree<number, Entry>(keyOf, cmp, { base: base }));
 				const shadows = children.map(() => new Map<number, Entry>(entries.map(e => [e.id, { ...e }])));
 
 				let uid = 0;	// globally-unique suffix so a freshly-generated key is never already present anywhere
@@ -405,7 +405,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			const c4Ins = [24005, 24015, 24025];	// untouched region -> whole rootward path is base-owned at clone time
 			const c4Del = [3010, 3020, 3030, 3040, 3050, 3060, 3070, 3080, 3090, 3100];	// dense interior band -> forces rebalance
 
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			for (const id of c1Ins) expect(c1.insert({ id, value: `c1_${id}`, tag: 'c1' }).on, `c1 insert ${id}`).to.equal(true);
 			const c1Expected = withIds(baseIds, c1Ins);
 			expect(liveIds(c1), 'c1 state').to.deep.equal(c1Expected);
@@ -413,7 +413,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			assertOwnershipInvariant(c1, base, snapBase);
 			const snapC1 = snapshotBase(c1);
 
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 			for (const id of c2Ins) expect(c2.insert({ id, value: `c2_${id}`, tag: 'c2' }).on, `c2 insert ${id}`).to.equal(true);
 			const c2Expected = withIds(c1Expected, c2Ins);
 			expect(liveIds(c2), 'c2 state').to.deep.equal(c2Expected);
@@ -421,7 +421,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			assertOwnershipInvariant(c2, c1, snapC1);
 			const snapC2 = snapshotBase(c2);
 
-			const c3 = new BTree<number, Entry>(keyOf, cmp, c2);
+			const c3 = new BTree<number, Entry>(keyOf, cmp, { base: c2 });
 			for (const id of c3Ins) expect(c3.insert({ id, value: `c3_${id}`, tag: 'c3' }).on, `c3 insert ${id}`).to.equal(true);
 			const c3Expected = withIds(c2Expected, c3Ins);
 			expect(liveIds(c3), 'c3 state').to.deep.equal(c3Expected);
@@ -431,7 +431,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 
 			// The deepest child: interior inserts AND a dense interior delete band, both far from any
 			// ancestor's writes — so the rootward clone must pass through several base-owned ancestor levels.
-			const c4 = new BTree<number, Entry>(keyOf, cmp, c3);
+			const c4 = new BTree<number, Entry>(keyOf, cmp, { base: c3 });
 			for (const id of c4Ins) expect(c4.insert({ id, value: `c4_${id}`, tag: 'c4' }).on, `c4 insert ${id}`).to.equal(true);
 			for (const id of c4Del) {
 				const p = c4.find(id);
@@ -475,25 +475,25 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			const c2Ins = [26005, 26015];
 			const c3Ins = [27005, 27015];
 
-			const c1 = new BTree<number, Entry>(keyOf, cmp, base);
+			const c1 = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			for (const id of c1Ins) expect(c1.insert({ id, value: `c1_${id}`, tag: 'c1' }).on, `c1 insert ${id}`).to.equal(true);
 			const c1Expected = [...baseIds, ...c1Ins].sort(cmp);
 			assertOwnershipInvariant(c1, base, snapBase);
 			const snapC1 = snapshotBase(c1);
 
-			const c2 = new BTree<number, Entry>(keyOf, cmp, c1);
+			const c2 = new BTree<number, Entry>(keyOf, cmp, { base: c1 });
 			for (const id of c2Ins) expect(c2.insert({ id, value: `c2_${id}`, tag: 'c2' }).on, `c2 insert ${id}`).to.equal(true);
 			const c2Expected = [...c1Expected, ...c2Ins].sort(cmp);
 			assertOwnershipInvariant(c2, c1, snapC1);
 			const snapC2 = snapshotBase(c2);
 
-			const c3 = new BTree<number, Entry>(keyOf, cmp, c2);
+			const c3 = new BTree<number, Entry>(keyOf, cmp, { base: c2 });
 			for (const id of c3Ins) expect(c3.insert({ id, value: `c3_${id}`, tag: 'c3' }).on, `c3 insert ${id}`).to.equal(true);
 			const c3Expected = [...c2Expected, ...c3Ins].sort(cmp);
 			assertOwnershipInvariant(c3, c2, snapC2);
 			const snapC3 = snapshotBase(c3);
 
-			const c4 = new BTree<number, Entry>(keyOf, cmp, c3);
+			const c4 = new BTree<number, Entry>(keyOf, cmp, { base: c3 });
 
 			// Pick an interior, min-fill (32-entry), base-owned LOW-region leaf. A single delete from a
 			// min-fill leaf underflows it, forcing a borrow/merge against an adjacent base-owned sibling —
@@ -562,7 +562,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 		it('regression: one interior delete cascades a leaf merge into a branch borrow/merge and stays correct', () => {
 			const { base, ids, entries } = makeBase(D2_COUNT, D2_STRIDE);
 			expect(depthOf(base.root), 'base is depth-2 (root -> branch -> leaf)').to.be.greaterThanOrEqual(2);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const snap = snapshotBase(base);
 
 			// An interior, min-fill, base-owned leaf: deleting one key underflows it (leaf merge), which
@@ -589,7 +589,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			this.timeout(30000);
 			const { base, ids, entries } = makeBase(D2_COUNT, D2_STRIDE);
 			expect(depthOf(base.root)).to.be.greaterThanOrEqual(2);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const snap = snapshotBase(base);
 
 			// Scattered deletion order so each delete strikes a different structural spot, sweeping every
@@ -622,7 +622,7 @@ describe('BTree COW multi-child fork & deep inheritance chains', () => {
 			this.timeout(30000);
 			const { base, entries } = makeBase(D2_COUNT, D2_STRIDE);
 			expect(depthOf(base.root)).to.be.greaterThanOrEqual(2);
-			const cow = new BTree<number, Entry>(keyOf, cmp, base);
+			const cow = new BTree<number, Entry>(keyOf, cmp, { base: base });
 			const snap = snapshotBase(base);
 			const shadow = new Map<number, Entry>(entries.map(e => [e.id, { ...e }]));
 

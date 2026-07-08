@@ -312,7 +312,7 @@ function runForkSeed(cfg: { seed: number; keyspace: number; warmup: number }): v
 	checkAgree(base, baseModel, baseKeys, true, `${tag} base @fork`);
 
 	// ---- Fork: derive the child; freeze the base's model as the fixed reference from here on ----
-	const child = new BTree<number, Entry>(keyOf, undefined, base);
+	const child = new BTree<number, Entry>(keyOf, undefined, { base });
 	const snap = snapshotBase(base);	// captured BEFORE any child write, for the ownership invariant
 	// The child's independent model starts as a copy of the base's model at the fork point.
 	const childModel = new Map<number, Entry>(Array.from(baseModel, ([k, e]) => [k, e]));
