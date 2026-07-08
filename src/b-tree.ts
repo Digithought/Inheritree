@@ -64,6 +64,13 @@ export class BTree<TKey, TEntry> {
 	private _root?: TreeNode<TKey, TEntry>;
 	/** Optional base tree this tree derives from (copy-on-write inheritance).  See the constructor docs. */
 	private base?: BTree<TKey, TEntry>;
+	/** Cache of {@link base}'s resolved root, populated lazily on first read (F11).  Sound under the
+	 * base-immutability contract: a base's effective root cannot legitimately change while this tree derives
+	 * from it, so once resolved there is no need to re-walk the base chain on every {@link root} read - only
+	 * {@link checkBase} (still run unconditionally) needs to keep firing to catch a contract violation.
+	 * Only ever read/written on the has-base path of {@link root}; irrelevant (never touched) once
+	 * {@link clearBase} drops {@link base}. */
+	private _baseRoot?: TreeNode<TKey, TEntry>;
 	/** Coarse, tree-wide mutation counter.  Every mutation ({@link insert}, {@link updateAt}, {@link upsert},
 	 * {@link merge}, {@link deleteAt}, {@link clear}) bumps this, and a path is valid only while its stamped
 	 * version still matches (see {@link isValid}).  Consequences of the coarseness, documented honestly:
@@ -143,11 +150,11 @@ export class BTree<TKey, TEntry> {
 	}
 
 	get root(): TreeNode<TKey, TEntry> {
-		this.checkBase();	// base-immutability guard: every fresh op (find/get/insert/...) resolves through here
+		this.checkBase();	// base-immutability guard: cache-then-check - still runs on every call, cached or not
 		if (this._root) {
 			return this._root;
 		} else if (this.base) {
-			return this.base.root;
+			return this._baseRoot ??= this.base.root;	// resolved once; a deep chain collapses to O(1) after warm-up
 		}
 
 		this._root = new LeafNode<TEntry>([], this);
@@ -176,6 +183,7 @@ export class BTree<TKey, TEntry> {
 		this.checkBase();	// refuse to detach off an already-mutated base (would launder corruption into a standalone tree)
 		this._root = this._root ?? this.base?.root;
 		this.base = undefined;
+		this._baseRoot = undefined;	// irrelevant now (root's has-base branch is unreachable), but drop the reference anyway
 	}
 
 	/**
